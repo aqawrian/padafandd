@@ -1,0 +1,6 @@
+{
+  "name": "Air Shield 3D",
+  "description": "Real-time 3D tactical air-defense tower defense game across 40 campaign missions and 4 theaters.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
