@@ -122,6 +122,12 @@ export const TacticalRadar: React.FC<TacticalRadarProps> = ({ snapshotRef }) => 
         } else if (b.kind === 'radar_tower') {
           ctx.fillStyle = '#fbbf24';
           ctx.fillRect(px - 2.1, pz - 2.1, 4.2, 4.2);
+        } else if (b.kind === 'facility') {
+          ctx.fillStyle = '#f59e0b';
+          ctx.fillRect(px - 2.4, pz - 2.4, 4.8, 4.8);
+          ctx.strokeStyle = '#34d399';
+          ctx.lineWidth = 1.1;
+          ctx.strokeRect(px - 2.4, pz - 2.4, 4.8, 4.8);
         } else if (b.kind === 'ally_fighter') {
           ctx.fillStyle = '#22d3ee';
           ctx.beginPath();
@@ -189,15 +195,16 @@ export const TacticalRadar: React.FC<TacticalRadarProps> = ({ snapshotRef }) => 
             ref={canvasRef}
             width={RADAR_SIZE}
             height={RADAR_SIZE}
-            className="block rounded-full w-[76px] h-[76px] md:w-[112px] md:h-[112px] short:w-[70px] short:h-[70px]"
+            className="block rounded-full w-[76px] h-[76px] md:w-[112px] md:h-[112px] short:w-[64px] short:h-[64px]"
           />
           <button
             type="button"
             onClick={() => setCollapsed(true)}
             title="جمع کردن رادار"
-            className="absolute -top-1 -right-1 w-6 h-6 short:w-5 short:h-5 rounded-full bg-[#0a0f1c] border border-white/15 text-sky-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+            aria-label="جمع کردن رادار"
+            className="absolute -top-1.5 -right-1.5 w-7 h-7 short:w-6 short:h-6 rounded-full bg-[#0a0f1c] border border-white/15 text-sky-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
           >
-            <Radio className="w-3 h-3 short:w-2.5 short:h-2.5" />
+            <Radio className="w-3.5 h-3.5 short:w-3 short:h-3" />
           </button>
         </div>
       ) : (
@@ -205,7 +212,7 @@ export const TacticalRadar: React.FC<TacticalRadarProps> = ({ snapshotRef }) => 
           type="button"
           onClick={() => setCollapsed(false)}
           title="نمایش رادار تاکتیکی"
-          className="px-2.5 py-1.5 short:px-2 short:py-1 rounded-xl bg-[#0a0f1c]/88 border border-white/10 text-sky-300 hover:text-white text-[11px] short:text-[10px] font-medium flex items-center gap-1.5 shadow-xl transition-colors cursor-pointer"
+          className="px-2.5 py-1.5 short:px-2.5 short:py-1.5 min-h-[34px] rounded-xl bg-[#0a0f1c]/90 border border-white/12 text-sky-300 hover:text-white text-[11px] short:text-[10px] font-semibold flex items-center gap-1.5 shadow-xl transition-colors cursor-pointer"
         >
           <Radio className="w-3.5 h-3.5 short:w-3 short:h-3" />
           <span>رادار</span>

@@ -576,89 +576,67 @@ class SoundManager {
     }
   }
 
-  // 4. Directed Energy Laser Beam
-  playLaser() {
-    if (!this.allowPlay('laser', 70)) return;
-    const bus = this.getSfxContext();
-    if (!bus) return;
-    const { ctx, out } = bus;
-    try {
-      const now = ctx.currentTime + 0.005;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(1040, now);
-      osc.frequency.exponentialRampToValueAtTime(340, now + 0.11);
-
-      gain.gain.setValueAtTime(0.13, now);
-      gain.gain.exponentialRampToValueAtTime(0.004, now + 0.115);
-
-      osc.connect(gain);
-      gain.connect(out);
-      this.trackVoice(osc, [osc, gain]);
-      osc.start(now);
-      osc.stop(now + 0.125);
-    } catch {
-      // ignore
-    }
-  }
-
-  // 4b. Hypersonic Electromagnetic Railgun Crack + Sonic Snap
-  playRailgun() {
-    if (!this.allowPlay('railgun', 140)) return;
+  // 4. Strategic Vertical Cold-Launch Heavy SAM Ignition (S-400 / THAAD)
+  playHeavySamLaunch() {
+    if (!this.allowPlay('heavy_sam', 150)) return;
     const bus = this.getSfxContext();
     if (!bus) return;
     const { ctx, out } = bus;
     try {
       const now = ctx.currentTime + 0.005;
 
-      // High-voltage electromagnetic discharge chirp
-      const zap = ctx.createOscillator();
-      const zapGain = ctx.createGain();
-      zap.type = 'sawtooth';
-      zap.frequency.setValueAtTime(1950, now);
-      zap.frequency.exponentialRampToValueAtTime(140, now + 0.19);
-      zapGain.gain.setValueAtTime(0.24, now);
-      zapGain.gain.exponentialRampToValueAtTime(0.003, now + 0.21);
-      zap.connect(zapGain);
-      zapGain.connect(out);
-      this.trackVoice(zap, [zap, zapGain]);
-      zap.start(now);
-      zap.stop(now + 0.22);
+      // Vertical cold-launch pneumatic canister pop
+      const pop = ctx.createOscillator();
+      const popGain = ctx.createGain();
+      pop.type = 'triangle';
+      pop.frequency.setValueAtTime(165, now);
+      pop.frequency.exponentialRampToValueAtTime(36, now + 0.22);
+      popGain.gain.setValueAtTime(0.36, now);
+      popGain.gain.exponentialRampToValueAtTime(0.004, now + 0.25);
+      pop.connect(popGain);
+      popGain.connect(out);
+      this.trackVoice(pop, [pop, popGain]);
+      pop.start(now);
+      pop.stop(now + 0.27);
 
-      // Deep kinetic rail thump
-      const thump = ctx.createOscillator();
-      const thumpGain = ctx.createGain();
-      thump.type = 'triangle';
-      thump.frequency.setValueAtTime(150, now);
-      thump.frequency.exponentialRampToValueAtTime(34, now + 0.24);
-      thumpGain.gain.setValueAtTime(0.32, now);
-      thumpGain.gain.exponentialRampToValueAtTime(0.003, now + 0.26);
-      thump.connect(thumpGain);
-      thumpGain.connect(out);
-      this.trackVoice(thump, [thump, thumpGain]);
-      thump.start(now);
-      thump.stop(now + 0.28);
+      // Supersonic booster motor ignition roar (delayed 55ms after cold-launch pop)
+      if (this.darkNoiseBuffer) {
+        const roar = ctx.createBufferSource();
+        roar.buffer = this.darkNoiseBuffer;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.setValueAtTime(1450, now + 0.05);
+        bp.frequency.exponentialRampToValueAtTime(340, now + 0.48);
+        bp.Q.setValueAtTime(0.85, now + 0.05);
+        const rGain = ctx.createGain();
+        rGain.gain.setValueAtTime(0.001, now);
+        rGain.gain.linearRampToValueAtTime(0.34, now + 0.075);
+        rGain.gain.exponentialRampToValueAtTime(0.004, now + 0.52);
+        roar.connect(bp);
+        bp.connect(rGain);
+        rGain.connect(out);
+        this.trackVoice(roar, [roar, bp, rGain]);
+        roar.start(now + 0.04);
+        roar.stop(now + 0.55);
+      }
 
-      // Hypersonic shockwave crack
+      // High-altitude supersonic crackle
       if (this.whiteNoiseBuffer) {
-        const crack = ctx.createBufferSource();
-        crack.buffer = this.whiteNoiseBuffer;
+        const hiss = ctx.createBufferSource();
+        hiss.buffer = this.whiteNoiseBuffer;
         const hp = ctx.createBiquadFilter();
-        hp.type = 'bandpass';
-        hp.frequency.setValueAtTime(2400, now);
-        hp.frequency.exponentialRampToValueAtTime(520, now + 0.16);
-        hp.Q.setValueAtTime(1.6, now);
-        const cGain = ctx.createGain();
-        cGain.gain.setValueAtTime(0.26, now);
-        cGain.gain.exponentialRampToValueAtTime(0.003, now + 0.18);
-        crack.connect(hp);
-        hp.connect(cGain);
-        cGain.connect(out);
-        this.trackVoice(crack, [crack, hp, cGain]);
-        crack.start(now);
-        crack.stop(now + 0.2);
+        hp.type = 'highpass';
+        hp.frequency.setValueAtTime(2200, now + 0.05);
+        const hGain = ctx.createGain();
+        hGain.gain.setValueAtTime(0.001, now);
+        hGain.gain.linearRampToValueAtTime(0.14, now + 0.08);
+        hGain.gain.exponentialRampToValueAtTime(0.003, now + 0.34);
+        hiss.connect(hp);
+        hp.connect(hGain);
+        hGain.connect(out);
+        this.trackVoice(hiss, [hiss, hp, hGain]);
+        hiss.start(now + 0.05);
+        hiss.stop(now + 0.36);
       }
     } catch {
       // ignore

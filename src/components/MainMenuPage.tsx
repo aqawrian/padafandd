@@ -72,33 +72,33 @@ export const MainMenuPage: React.FC<MainMenuPageProps> = ({
       className="relative w-full h-full overflow-y-auto bg-[#070b14] text-slate-100 flex flex-col"
     >
       {/* Top Bar Contract: 3 clean zones (Brand — Nav Links — Primary CTA) */}
-      <header className="sticky top-0 z-30 w-full bg-[#070b14]/88 backdrop-blur-md border-b border-white/10 shrink-0">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 short:h-11 flex items-center justify-between gap-6">
+      <header className="sticky top-0 z-30 w-full bg-[#070b14]/90 backdrop-blur-md border-b border-white/10 shrink-0">
+        <div className="max-w-7xl mx-auto safe-x-padding sm:px-6 lg:px-8 h-14 short:h-11 flex items-center justify-between gap-4 sm:gap-6">
           {/* Zone 1: Single-line Brand Wordmark */}
-          <div className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
+          <div className="flex items-center gap-2 whitespace-nowrap shrink-0">
             <Shield className="w-5 h-5 short:w-4 short:h-4 text-amber-400" />
             <span className="text-base short:text-sm font-bold tracking-tight text-white">
               پدافند هوایی
             </span>
           </div>
 
-          {/* Zone 2: Clean single-line navigation links */}
-          <nav className="hidden md:flex items-center gap-7 text-xs font-medium text-slate-300">
+          {/* Zone 2: Clean single-line navigation links (visible on landscape mobile & desktop) */}
+          <nav className="hidden sm:flex short:flex items-center gap-4 sm:gap-6 lg:gap-7 text-xs short:text-[11px] font-medium text-slate-300 overflow-x-auto no-scrollbar">
             <button
               onClick={() => onOpenRoadmap()}
-              className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer py-1"
+              className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer py-1.5"
             >
               نقشه مراحل
             </button>
             <button
               onClick={onOpenTechLab}
-              className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer py-1"
+              className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer py-1.5"
             >
               آزمایشگاه فناوری
             </button>
             <button
               onClick={onOpenUnits}
-              className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer py-1"
+              className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer py-1.5"
             >
               واحدها و تجهیزات
             </button>
@@ -108,7 +108,7 @@ export const MainMenuPage: React.FC<MainMenuPageProps> = ({
           <div className="flex items-center shrink-0">
             <button
               onClick={onContinueCampaign}
-              className="px-4 py-2 short:px-3 short:py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="px-4 py-2 short:px-3 short:py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs short:text-[11px] flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Play className="w-3.5 h-3.5 fill-current" />
               <span>{hasProgress ? `ادامه مرحله ${resumeStage.stageNumber}` : 'شروع عملیات'}</span>
@@ -120,7 +120,7 @@ export const MainMenuPage: React.FC<MainMenuPageProps> = ({
       {/* Main Content Flow */}
       <main className="flex-1 flex flex-col">
         {/* Dominant Hero Section with Full-Bleed 16:9 Key Art */}
-        <section className="relative w-full min-h-[380px] sm:min-h-[460px] lg:min-h-[540px] short:min-h-[260px] flex items-center overflow-hidden border-b border-white/10">
+        <section className="relative w-full min-h-[380px] sm:min-h-[460px] lg:min-h-[540px] short:min-h-[215px] flex items-center overflow-hidden border-b border-white/10">
           {/* Background Key Art + Resilient Fallback */}
           <div className="absolute inset-0 bg-gradient-to-br from-[#0a1324] via-[#0e192f] to-[#070b14]">
             {!heroImgFailed && (
@@ -137,103 +137,103 @@ export const MainMenuPage: React.FC<MainMenuPageProps> = ({
             <div className="absolute inset-0 bg-gradient-to-t from-[#070b14] via-transparent to-[#070b14]/45" />
           </div>
 
-          <div className="relative z-10 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 short:py-4">
-            <div className="max-w-xl short:max-w-lg space-y-5 short:space-y-3">
-              {/* Quiet unboxed kicker metadata (zero pills) */}
-              <div className="flex flex-wrap items-center gap-2 text-xs short:text-[11px] text-amber-300/95 font-medium">
-                <span>عملیات دفاع هوایی سه‌بعدی</span>
-                <span className="text-slate-500" aria-hidden="true">·</span>
-                <span className="text-slate-300">۴۰ مرحله در ۴ اقلیم</span>
-                {resumeStage.isNightStage && (
-                  <>
-                    <span className="text-slate-500" aria-hidden="true">·</span>
-                    <span className="inline-flex items-center gap-1 text-sky-300">
-                      <Moon className="w-3 h-3" />
-                      عملیات شبانه
+          <div className="relative z-10 max-w-7xl w-full mx-auto safe-x-padding sm:px-6 lg:px-8 py-8 sm:py-12 short:py-3.5">
+            <div className="short:grid short:grid-cols-[1.35fr_0.65fr] short:items-center short:gap-5">
+              <div className="max-w-xl short:max-w-none space-y-5 short:space-y-2.5">
+                {/* Quiet unboxed kicker metadata (zero pills) */}
+                <div className="flex flex-wrap items-center gap-2 text-xs short:text-[11px] text-amber-300/95 font-medium">
+                  <span>عملیات دفاع هوایی سه‌بعدی</span>
+                  <span className="text-slate-500" aria-hidden="true">·</span>
+                  <span className="text-slate-300">۴۰ مرحله در ۴ اقلیم</span>
+                  {resumeStage.isNightStage && (
+                    <>
+                      <span className="text-slate-500" aria-hidden="true">·</span>
+                      <span className="inline-flex items-center gap-1 text-sky-300">
+                        <Moon className="w-3 h-3" />
+                        عملیات شبانه
+                      </span>
+                    </>
+                  )}
+                </div>
+
+                <h1
+                  className="text-3xl sm:text-5xl short:text-xl font-bold text-white leading-tight tracking-tight"
+                  style={{ textWrap: 'balance' }}
+                >
+                  آسمان پایگاه را زیر سپر آتش نگه دارید
+                </h1>
+
+                <p className="text-sm sm:text-base short:text-[11px] text-slate-300 leading-relaxed max-w-lg short:line-clamp-2">
+                  شبکه راداری چندلایه برپا کنید، سامانه‌های توپخانه‌ای و موشکی مدرن را هوشمندانه بچینید و با پشتیبانی اسکادران جنگنده خودی در برابر یورش پهپادها، موشک‌های کروز و بمب‌افکن‌های راهبردی ایستادگی کنید.
+                </p>
+
+                {/* Action Hierarchy: 1 Dominant Primary CTA + 2 Calm Secondary Actions */}
+                <div className="flex flex-wrap items-center gap-3 short:gap-2 pt-1 short:pt-0.5">
+                  <button
+                    onClick={onContinueCampaign}
+                    className="px-6 py-3 short:px-4 short:py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm short:text-xs flex items-center gap-2 shadow-lg shadow-amber-500/15 transition-all active:scale-[0.98] whitespace-nowrap cursor-pointer"
+                  >
+                    <Play className="w-4 h-4 short:w-3.5 short:h-3.5 fill-current" />
+                    <span>
+                      {hasProgress
+                        ? `ادامه مرحله ${resumeStage.stageNumber}: ${resumeStage.titleFa}`
+                        : `آغاز مرحله ۱: ${resumeStage.titleFa}`}
                     </span>
-                  </>
-                )}
+                  </button>
+
+                  <button
+                    onClick={() => onOpenRoadmap()}
+                    className="px-4 py-3 short:px-3 short:py-2 rounded-xl bg-white/8 hover:bg-white/14 border border-white/15 text-white font-semibold text-xs sm:text-sm short:text-xs flex items-center gap-1.5 backdrop-blur-sm transition-colors whitespace-nowrap cursor-pointer"
+                  >
+                    <MapIcon className="w-4 h-4 short:w-3.5 short:h-3.5 text-amber-300" />
+                    <span>نقشه عملیات</span>
+                  </button>
+
+                  <button
+                    onClick={() => onStartEndless(activeBiome)}
+                    className="px-4 py-3 short:px-3 short:py-2 rounded-xl bg-white/5 hover:bg-white/12 border border-white/12 text-slate-200 hover:text-white font-medium text-xs sm:text-sm short:text-xs flex items-center gap-1.5 backdrop-blur-sm transition-colors whitespace-nowrap cursor-pointer"
+                  >
+                    <InfinityIcon className="w-4 h-4 short:w-3.5 short:h-3.5 text-rose-400" />
+                    <span>بقای بی‌نهایت</span>
+                  </button>
+                </div>
               </div>
 
-              <h1
-                className="text-3xl sm:text-5xl short:text-2xl font-bold text-white leading-tight tracking-tight"
-                style={{ textWrap: 'balance' }}
-              >
-                آسمان پایگاه را زیر سپر آتش نگه دارید
-              </h1>
-
-              <p className="text-sm sm:text-base short:text-xs text-slate-300 leading-relaxed max-w-lg">
-                شبکه راداری چندلایه برپا کنید، سامانه‌های موشکی و لیزری را هوشمندانه بچینید و با پشتیبانی اسکادران جنگنده خودی در برابر یورش پهپادها، موشک‌های کروز و باس‌های هوایی ایستادگی کنید.
-              </p>
-
-              {/* Action Hierarchy: 1 Dominant Primary CTA + 2 Calm Secondary Actions */}
-              <div className="flex flex-wrap items-center gap-3 short:gap-2 pt-1">
-                <button
-                  onClick={onContinueCampaign}
-                  className="px-6 py-3 short:px-4 short:py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm short:text-xs flex items-center gap-2 shadow-lg shadow-amber-500/15 transition-all active:scale-[0.98] whitespace-nowrap cursor-pointer"
-                >
-                  <Play className="w-4 h-4 short:w-3.5 short:h-3.5 fill-current" />
-                  <span>
-                    {hasProgress
-                      ? `ادامه مرحله ${resumeStage.stageNumber}: ${resumeStage.titleFa}`
-                      : `آغاز مرحله ۱: ${resumeStage.titleFa}`}
-                  </span>
-                </button>
-
-                <button
-                  onClick={() => onOpenRoadmap()}
-                  className="px-4 py-3 short:px-3.5 short:py-2 rounded-xl bg-white/8 hover:bg-white/14 border border-white/15 text-white font-semibold text-xs sm:text-sm short:text-xs flex items-center gap-2 backdrop-blur-sm transition-colors whitespace-nowrap cursor-pointer"
-                >
-                  <MapIcon className="w-4 h-4 short:w-3.5 short:h-3.5 text-amber-300" />
-                  <span>نقشه عملیات</span>
-                </button>
-
-                <button
-                  onClick={() => onStartEndless(activeBiome)}
-                  className="px-4 py-3 short:px-3.5 short:py-2 rounded-xl bg-white/5 hover:bg-white/12 border border-white/12 text-slate-200 hover:text-white font-medium text-xs sm:text-sm short:text-xs flex items-center gap-2 backdrop-blur-sm transition-colors whitespace-nowrap cursor-pointer"
-                >
-                  <InfinityIcon className="w-4 h-4 short:w-3.5 short:h-3.5 text-rose-400" />
-                  <span>بقای بی‌نهایت</span>
-                </button>
-              </div>
-
-              {/* Real Commander Career Metrics (Unboxed, Tabular Numerals, Hairline Separators) */}
-              <div className="pt-4 short:pt-2 border-t border-white/10 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs short:text-[11px]">
+              {/* Real Commander Career Metrics (Inline Row on Desktop, Clean 2x2 Panel on Landscape Mobile) */}
+              <div className="pt-4 mt-4 sm:mt-5 short:mt-0 short:pt-3 short:p-3 border-t border-white/10 short:border short:rounded-xl short:bg-[#070b14]/70 short:backdrop-blur-sm flex flex-wrap short:grid short:grid-cols-2 items-center gap-x-6 gap-y-2 short:gap-2.5 text-xs short:text-[11px]">
                 <div className="flex items-center gap-1.5">
-                  <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                  <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400 shrink-0" />
                   <span className="text-slate-400">ستاره‌ها:</span>
                   <span className="font-mono font-bold text-white tabular-nums">{totalStars}/120</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <Radar className="w-3.5 h-3.5 text-sky-400" />
+                  <Radar className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                   <span className="text-slate-400">مرحله باز:</span>
                   <span className="font-mono font-bold text-white tabular-nums">
                     {profile.highestUnlocked}/40
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <Crosshair className="w-3.5 h-3.5 text-emerald-400" />
+                  <Crosshair className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                   <span className="text-slate-400">شکار هوایی:</span>
                   <span className="font-mono font-bold text-white tabular-nums">
                     {profile.stats.totalKills}
                   </span>
                 </div>
-                {bestEndlessWave > 0 && (
-                  <div className="flex items-center gap-1.5">
-                    <InfinityIcon className="w-3.5 h-3.5 text-rose-400" />
-                    <span className="text-slate-400">رکورد بقا:</span>
-                    <span className="font-mono font-bold text-white tabular-nums">
-                      موج {bestEndlessWave}
-                    </span>
-                  </div>
-                )}
+                <div className="flex items-center gap-1.5">
+                  <InfinityIcon className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                  <span className="text-slate-400">رکورد بقا:</span>
+                  <span className="font-mono font-bold text-white tabular-nums">
+                    {bestEndlessWave > 0 ? `موج ${bestEndlessWave}` : '—'}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
         </section>
 
-        {/* 3 Visual Operation Theaters + Quick Command Links */}
-        <section className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-7 sm:py-9 short:py-4 space-y-6 short:space-y-4">
+        {/* 4 Visual Operation Theaters + Quick Command Links */}
+        <section className="max-w-7xl w-full mx-auto safe-x-padding sm:px-6 lg:px-8 py-7 sm:py-9 short:py-3.5 space-y-6 short:space-y-3">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <h2 className="text-lg sm:text-xl short:text-sm font-bold text-white">
@@ -265,7 +265,7 @@ export const MainMenuPage: React.FC<MainMenuPageProps> = ({
           </div>
 
           {/* 4 Bespoke Illustrated Theater Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 short:gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 sm:gap-5 short:gap-2.5">
             {CAMPAIGN_CHAPTERS.map((chap) => {
               const Icon = CHAPTER_ICONS[chap.chapter];
               const art = THEATER_ARTWORK[chap.biome];

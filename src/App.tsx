@@ -345,7 +345,7 @@ export default function App() {
         <div className="flex flex-col w-full h-full">
           <header
             dir="rtl"
-            className="flex items-center justify-between gap-3 sm:gap-6 px-3 sm:px-5 py-2.5 short:py-1.5 bg-[#0c1220] border-b border-white/10 shrink-0"
+            className="flex items-center justify-between gap-3 sm:gap-6 safe-x-padding sm:px-5 py-2.5 short:py-1.5 bg-[#0c1220] border-b border-white/10 shrink-0"
           >
             <button
               onClick={() => setCurrentView('home')}
@@ -434,30 +434,31 @@ export default function App() {
 
           <aside
             dir="rtl"
-            className="w-72 max-w-[85vw] h-full bg-[#0c1220] border-r border-white/10 shadow-2xl flex flex-col justify-between p-5 short:p-3 overflow-y-auto"
+            className="w-72 short:w-[348px] max-w-[88vw] h-full bg-[#0c1220] border-r border-white/10 shadow-2xl flex flex-col justify-between safe-drawer-padding overflow-y-auto"
           >
             <div>
-              <div className="flex items-center justify-between pb-4 short:pb-2.5 border-b border-white/10">
+              <div className="flex items-center justify-between pb-4 short:pb-2 border-b border-white/10">
                 <div className="flex items-center gap-2.5">
-                  <Shield className="w-5 h-5 text-amber-400" />
-                  <span className="font-bold text-sm text-white">پدافند هوایی</span>
+                  <Shield className="w-5 h-5 short:w-4 short:h-4 text-amber-400" />
+                  <span className="font-bold text-sm short:text-xs text-white">پدافند هوایی</span>
                 </div>
                 <button
                   onClick={() => setMenuOpen(false)}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+                  className="p-2 short:p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+                  aria-label="بستن منو"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              {/* Navigation Links */}
-              <div className="mt-4 short:mt-2.5 space-y-1.5 short:space-y-1">
+              {/* Navigation Links (2-Column Zero-Scroll Grid on Landscape Mobile!) */}
+              <div className="mt-4 short:mt-2.5 space-y-1.5 short:space-y-0 short:grid short:grid-cols-2 short:gap-1.5">
                 <button
                   onClick={() => navigateTo('home')}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 short:py-1.5 rounded-xl text-xs font-semibold text-slate-200 hover:bg-white/8 transition-colors cursor-pointer"
+                  className="w-full flex items-center gap-2.5 px-3 py-2.5 short:px-2.5 short:py-2 rounded-xl short:rounded-lg text-xs short:text-[11px] font-semibold text-slate-200 hover:bg-white/8 transition-colors cursor-pointer"
                 >
-                  <Home className="w-4 h-4 text-amber-400" />
-                  <span>صفحه اصلی</span>
+                  <Home className="w-4 h-4 short:w-3.5 short:h-3.5 text-amber-400 shrink-0" />
+                  <span className="truncate">صفحه اصلی</span>
                 </button>
 
                 <button
@@ -465,15 +466,15 @@ export default function App() {
                     setMenuOpen(false);
                     handleOpenRoadmap();
                   }}
-                  className="w-full flex items-center justify-between px-3 py-2.5 short:py-2 rounded-xl text-xs font-semibold bg-amber-500/12 text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer"
+                  className="w-full flex items-center justify-between gap-1 px-3 py-2.5 short:px-2.5 short:py-2 rounded-xl short:rounded-lg text-xs short:text-[11px] font-semibold bg-amber-500/12 text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer"
                 >
-                  <span className="flex items-center gap-3">
-                    <MapIcon className="w-4 h-4" />
-                    <span>نقشه ۴۰ مرحله‌ای</span>
+                  <span className="flex items-center gap-2 min-w-0">
+                    <MapIcon className="w-4 h-4 short:w-3.5 short:h-3.5 shrink-0" />
+                    <span className="truncate">مراحل</span>
                   </span>
-                  <span className="flex items-center gap-1 font-mono text-[11px] tabular-nums">
+                  <span className="flex items-center gap-0.5 font-mono text-[10px] tabular-nums shrink-0">
                     <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-                    {totalStars}/120
+                    {totalStars}
                   </span>
                 </button>
 
@@ -482,61 +483,61 @@ export default function App() {
                     setMenuOpen(false);
                     setTechLabOpen(true);
                   }}
-                  className="w-full flex items-center justify-between px-3 py-2.5 short:py-2 rounded-xl text-xs font-semibold bg-sky-500/12 text-sky-300 hover:bg-sky-500/20 transition-colors cursor-pointer"
+                  className="w-full flex items-center justify-between gap-1 px-3 py-2.5 short:px-2.5 short:py-2 rounded-xl short:rounded-lg text-xs short:text-[11px] font-semibold bg-sky-500/12 text-sky-300 hover:bg-sky-500/20 transition-colors cursor-pointer"
                 >
-                  <span className="flex items-center gap-3">
-                    <Cpu className="w-4 h-4" />
-                    <span>آزمایشگاه فناوری</span>
+                  <span className="flex items-center gap-2 min-w-0">
+                    <Cpu className="w-4 h-4 short:w-3.5 short:h-3.5 shrink-0" />
+                    <span className="truncate">فناوری</span>
                   </span>
-                  <span className="font-mono text-[11px] tabular-nums text-amber-300">
-                    ★ {availableStars}
+                  <span className="font-mono text-[10px] tabular-nums text-amber-300 shrink-0">
+                    ★{availableStars}
                   </span>
                 </button>
 
                 <button
                   onClick={() => handleStartEndless(biome)}
-                  className="w-full flex items-center justify-between px-3 py-2.5 short:py-2 rounded-xl text-xs font-semibold bg-orange-500/12 text-orange-300 hover:bg-orange-500/20 transition-colors cursor-pointer"
+                  className="w-full flex items-center justify-between gap-1 px-3 py-2.5 short:px-2.5 short:py-2 rounded-xl short:rounded-lg text-xs short:text-[11px] font-semibold bg-orange-500/12 text-orange-300 hover:bg-orange-500/20 transition-colors cursor-pointer"
                 >
-                  <span className="flex items-center gap-3">
-                    <InfinityIcon className="w-4 h-4" />
-                    <span>حالت بقای بی‌نهایت</span>
+                  <span className="flex items-center gap-2 min-w-0">
+                    <InfinityIcon className="w-4 h-4 short:w-3.5 short:h-3.5 shrink-0" />
+                    <span className="truncate">بقا</span>
                   </span>
-                  <span className="font-mono text-[10px] tabular-nums text-orange-200/80">
-                    رکورد {endlessBestWave}
+                  <span className="font-mono text-[10px] tabular-nums text-orange-200/80 shrink-0">
+                    {endlessBestWave}
                   </span>
                 </button>
 
                 <button
                   onClick={() => navigateTo('viewport')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 short:py-1.5 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 short:px-2.5 short:py-2 rounded-xl short:rounded-lg text-xs short:text-[11px] font-medium transition-colors cursor-pointer ${
                     currentView === 'viewport'
                       ? 'bg-white/10 text-white'
                       : 'text-slate-300 hover:bg-white/5 hover:text-white'
                   }`}
                 >
-                  <Box className="w-4 h-4" />
-                  <span>نمای نبرد سه‌بعدی</span>
+                  <Box className="w-4 h-4 short:w-3.5 short:h-3.5 shrink-0" />
+                  <span className="truncate">نبرد سه‌بعدی</span>
                 </button>
 
                 <button
                   onClick={() => navigateTo('units')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 short:py-1.5 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 short:px-2.5 short:py-2 rounded-xl short:rounded-lg text-xs short:text-[11px] font-medium transition-colors cursor-pointer ${
                     currentView === 'units'
                       ? 'bg-white/10 text-white'
                       : 'text-slate-300 hover:bg-white/5 hover:text-white'
                   }`}
                 >
-                  <Database className="w-4 h-4" />
-                  <span>واحدها و تجهیزات</span>
+                  <Database className="w-4 h-4 short:w-3.5 short:h-3.5 shrink-0" />
+                  <span className="truncate">تجهیزات</span>
                 </button>
               </div>
 
-              {/* Quick Map Biome Switcher */}
-              <div className="mt-4 short:mt-2.5 pt-3.5 short:pt-2.5 border-t border-white/10">
-                <span className="text-[11px] font-medium text-slate-400 block mb-2 short:mb-1 px-1">
+              {/* Quick Map Biome Switcher (2x2 Grid on Landscape Mobile!) */}
+              <div className="mt-4 short:mt-2.5 pt-3.5 short:pt-2 border-t border-white/10">
+                <span className="text-[11px] short:text-[10px] font-medium text-slate-400 block mb-2 short:mb-1.5 px-1">
                   تغییر ظاهر نقشه
                 </span>
-                <div className="space-y-1">
+                <div className="space-y-1 short:space-y-0 short:grid short:grid-cols-2 short:gap-1.5">
                   {(
                     [
                       { id: 'alpine' as MapBiome, Icon: Mountain },
@@ -554,15 +555,15 @@ export default function App() {
                           setBiome(id);
                           navigateTo('viewport');
                         }}
-                        className={`w-full flex items-center justify-between px-3 py-2 short:py-1.5 rounded-xl text-xs transition-colors cursor-pointer ${
+                        className={`w-full flex items-center justify-between px-3 py-2 short:px-2.5 short:py-1.5 rounded-xl short:rounded-lg text-xs short:text-[11px] transition-colors cursor-pointer ${
                           active
-                            ? 'bg-white/10 text-white font-semibold'
-                            : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                            ? 'bg-white/10 text-white font-semibold border border-amber-400/35'
+                            : 'text-slate-400 hover:bg-white/5 hover:text-slate-200 border border-transparent'
                         }`}
                       >
-                        <span className="flex items-center gap-2.5">
-                          <Icon className="w-4 h-4 text-amber-400" />
-                          <span>{cfg.labelFa}</span>
+                        <span className="flex items-center gap-2 min-w-0">
+                          <Icon className="w-4 h-4 short:w-3.5 short:h-3.5 text-amber-400 shrink-0" />
+                          <span className="truncate">{cfg.labelFa}</span>
                         </span>
                       </button>
                     );
@@ -571,7 +572,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="pt-3 mt-3 border-t border-white/10 text-[11px] text-slate-500 leading-relaxed">
+            <div className="pt-3 short:pt-2 mt-3 short:mt-2 border-t border-white/10 text-[11px] short:text-[10px] text-slate-500 leading-relaxed">
               کنترل لمسی: ۱ انگشت چرخش · ۲ انگشت زوم · لمس کوتاه استقرار برجک
             </div>
           </aside>

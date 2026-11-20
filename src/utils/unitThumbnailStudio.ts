@@ -102,7 +102,7 @@ export function renderUnitThumbnailsBatch(
       box.getCenter(center);
       box.getBoundingSphere(sphere);
 
-      const radius = Math.max(0.95, sphere.radius);
+      const radius = Math.max(0.44, sphere.radius);
       const fovRad = THREE.MathUtils.degToRad(camera.fov);
       const dist = (radius / Math.sin(fovRad / 2)) * zoomFactor;
 

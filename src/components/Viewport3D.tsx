@@ -7,6 +7,8 @@ import {
   EnemyUnit,
   ActiveEnemy,
   ActiveTower,
+  BaseFacilityStatus,
+  DefeatReason,
   FlightDoctrine,
   GameMode,
   MapBiome,
@@ -24,10 +26,13 @@ import {
   buildEnemy3D,
   buildBaseBunker3D,
   buildAllyFighter3D,
+  buildSecondaryFacility3D,
+  createHealthBarBillboard,
   TowerRig,
   EnemyRig,
   BunkerRig,
   AllyFighterRig,
+  SecondaryFacilityRig,
 } from '../utils/meshFactory';
 import {
   BIOME_CONFIGS,
@@ -74,10 +79,6 @@ interface SharedCombatAssets {
   missileFinMat: THREE.MeshStandardMaterial;
   missileFlameGeo: THREE.ConeGeometry;
   missileFlameMat: THREE.MeshBasicMaterial;
-  laserCoreGeo: THREE.CylinderGeometry;
-  laserCoreMat: THREE.MeshBasicMaterial;
-  laserHaloGeo: THREE.CylinderGeometry;
-  laserHaloMat: THREE.MeshBasicMaterial;
   muzzleFlashGeo: THREE.OctahedronGeometry;
   muzzleFlashMats: THREE.MeshBasicMaterial[];
   smokeGeo: THREE.DodecahedronGeometry;
@@ -147,6 +148,8 @@ interface CapFighterState {
   lastContrailTime: number;
 }
 
+type GroundTargetKind = 'hq' | 'tower' | 'facility';
+
 interface PooledOrdnanceSlot {
   active: boolean;
   id: string;
@@ -165,11 +168,19 @@ interface PooledOrdnanceSlot {
   maxAge: number;
   lastSmokeTime: number;
   isBomb: boolean;
+  targetKind: GroundTargetKind;
+  targetId: string;
+  targetX: number;
+  targetZ: number;
 }
+
+type ProjectileGuidanceMode = 'ballistic' | 'short_rocket' | 'radar_sam';
 
 interface PooledProjectileSlot {
   active: boolean;
   type: 'bullet' | 'missile';
+  guidanceMode: ProjectileGuidanceMode;
+  selfDestructAt: number;
   mesh: THREE.Object3D;
   x: number;
   y: number;
@@ -192,13 +203,8 @@ interface PooledProjectileSlot {
   weaveFreq: number;
   weaveAmp: number;
   turnRate: number;
-}
-
-interface PooledLaserSlot {
-  active: boolean;
-  coreMesh: THREE.Mesh;
-  haloMesh: THREE.Mesh;
-  expiresAt: number;
+  radarGuided: boolean;
+  isStrategicSam: boolean;
 }
 
 interface PooledShockwaveSlot {
@@ -257,7 +263,6 @@ interface CombatPools {
   missiles: PooledProjectileSlot[];
   ordnances: PooledOrdnanceSlot[];
   flares: PooledFlareSlot[];
-  lasers: PooledLaserSlot[];
   muzzles: PooledMuzzleSlot[];
   smokes: PooledSmokeSlot[];
   particles: PooledParticleSlot[];
@@ -280,7 +285,6 @@ const POOL_BULLETS = 64;
 const POOL_MISSILES = 56;
 const POOL_ENEMY_ORDNANCE = 24;
 const POOL_FLARES = 28;
-const POOL_LASERS = 12;
 const POOL_MUZZLES = 24;
 const POOL_SMOKES = 76;
 const POOL_PARTICLES = 112;
@@ -399,6 +403,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   const [capCooldownLeft, setCapCooldownLeft] = useState(0);
   const [capActiveLeft, setCapActiveLeft] = useState(0);
   const [isNightRaid, setIsNightRaid] = useState(Boolean(gameMode === 'campaign' && stageConfig.isNightStage));
+  const [facilities, setFacilities] = useState<BaseFacilityStatus[]>([]);
+  const [defeatReason, setDefeatReason] = useState<DefeatReason>('hq_destroyed');
+  const [tacticalAlert, setTacticalAlert] = useState<string | null>(null);
 
   // Tower Building & Selection State
   const [selectedTowerToBuild, setSelectedTowerToBuild] = useState<DefenseTower | null>(null);
@@ -498,6 +505,26 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     rimLight: THREE.DirectionalLight;
   } | null>(null);
 
+  const alertTimeoutRef = useRef<number | null>(null);
+  const pushTacticalAlert = useCallback((msg: string) => {
+    setTacticalAlert(msg);
+    if (alertTimeoutRef.current !== null) {
+      window.clearTimeout(alertTimeoutRef.current);
+    }
+    alertTimeoutRef.current = window.setTimeout(() => {
+      setTacticalAlert(null);
+      alertTimeoutRef.current = null;
+    }, 3600);
+  }, []);
+
+  const activeFacilitiesRef = useRef<
+    {
+      status: BaseFacilityStatus;
+      rig: SecondaryFacilityRig;
+      lastSmokeTime: number;
+    }[]
+  >([]);
+
   const activeTowersRef = useRef<
     Map<
       string,
@@ -505,7 +532,10 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         towerState: ActiveTower;
         rig: TowerRig;
         rangeMesh: THREE.Mesh;
+        healthBar: { mesh: THREE.Object3D; updateHp: (current: number, maxOverride?: number) => void };
+        lastSmokeTime: number;
         muzzleCursor: number;
+        shotCounter: number;
       }
     >
   >(new Map());
@@ -529,6 +559,17 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         prevX: number;
         prevY: number;
         prevZ: number;
+        velX: number;
+        velY: number;
+        velZ: number;
+        evadeStart: number;
+        evadeUntil: number;
+        evadeCooldownUntil: number;
+        evadeDir: number;
+        evadeAmpLat: number;
+        evadeAmpVert: number;
+        evadeLatOffset: number;
+        evadeVertOffset: number;
         bankAngle: number;
         doctrine: FlightDoctrine;
         flightPhase: 'approach' | 'egress' | 'turnaround' | 'orbit';
@@ -544,6 +585,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         ordnanceCooldownAt: number;
         egressHeading: number;
         lastDogfightGunTime: number;
+        targetKind: GroundTargetKind;
+        targetId: string;
       }
     >
   >(new Map());
@@ -606,18 +649,47 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     camera.lookAt(target.x + sx * 0.25, target.y + sy * 0.25, target.z + sz * 0.25);
   };
 
+  const getResponsiveCameraPreset = (mode: 'isometric' | 'topdown') => {
+    const el = mountRef.current;
+    const w = el?.clientWidth || window.innerWidth;
+    const h = el?.clientHeight || window.innerHeight;
+    const aspect = w / Math.max(1, h);
+    const isShortLandscape = h <= 540 && w > h;
+
+    if (mode === 'isometric') {
+      return {
+        distance: isShortLandscape ? (aspect > 2.0 ? 58 : 61) : 60,
+        pitch: (isShortLandscape ? 37 : 33) * (Math.PI / 180),
+        yaw: 44 * (Math.PI / 180),
+      };
+    }
+    return {
+      distance: isShortLandscape ? (aspect > 2.0 ? 82 : 78) : 74,
+      pitch: 82 * (Math.PI / 180),
+      yaw: 0,
+    };
+  };
+
   const handleSetCameraView = (mode: 'isometric' | 'topdown') => {
     setCameraMode(mode);
+    const preset = getResponsiveCameraPreset(mode);
     cameraState.current.transitioning = true;
-    if (mode === 'isometric') {
-      cameraState.current.goalDistance = 60;
-      cameraState.current.goalPitch = 33 * (Math.PI / 180);
-      cameraState.current.goalYaw = 44 * (Math.PI / 180);
-    } else {
-      cameraState.current.goalDistance = 74;
-      cameraState.current.goalPitch = 82 * (Math.PI / 180);
-      cameraState.current.goalYaw = 0;
-    }
+    cameraState.current.goalDistance = preset.distance;
+    cameraState.current.goalPitch = preset.pitch;
+    cameraState.current.goalYaw = preset.yaw;
+  };
+
+  const handleZoomCamera = (delta: number) => {
+    const cs = cameraState.current;
+    const baseDist = cs.transitioning ? cs.goalDistance : cs.distance;
+    cs.goalDistance = Math.max(18, Math.min(115, baseDist + delta));
+    cs.goalPitch = cs.pitch;
+    cs.goalYaw = cs.yaw;
+    cs.transitioning = true;
+  };
+
+  const handleResetCamera = () => {
+    handleSetCameraView('isometric');
   };
 
   const syncRangeRingVisibility = () => {
@@ -763,37 +835,6 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     chosen.mesh.visible = true;
   };
 
-  // Helper: Acquire pooled cyan impact sparks for laser hits
-  const spawnLaserSparks = (x: number, y: number, z: number) => {
-    const pools = poolsRef.current;
-    const assets = sharedAssetsRef.current;
-    if (!pools || !assets) return;
-
-    let spawned = 0;
-    for (let i = 0; i < pools.particles.length && spawned < 3; i++) {
-      const slot = pools.particles[i];
-      if (!slot.active) {
-        const a = Math.random() * Math.PI * 2;
-        const spd = 2.6 + Math.random() * 3.4;
-        slot.active = true;
-        slot.x = x;
-        slot.y = y;
-        slot.z = z;
-        slot.vx = Math.cos(a) * spd;
-        slot.vy = 1.0 + Math.random() * 2.2;
-        slot.vz = Math.sin(a) * spd;
-        slot.size = 0.17;
-        slot.life = 0;
-        slot.maxLife = 0.22 + Math.random() * 0.14;
-        slot.mesh.material = assets.sparkMatCyan;
-        slot.mesh.position.set(x, y, z);
-        slot.mesh.scale.setScalar(slot.size);
-        slot.mesh.visible = true;
-        spawned++;
-      }
-    }
-  };
-
   // Helper: Trigger cinematic multi-layer pooled explosion (100% zero-allocation!)
   const triggerExplosion = (x: number, y: number, z: number, scale = 1.0) => {
     const pools = poolsRef.current;
@@ -855,6 +896,61 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     }
   };
 
+  // Helper: Select a tactical ground target (Player Defense Tower, Secondary Facility, or Central HQ)
+  const pickGroundTarget = (
+    preferValuable: boolean
+  ): { kind: GroundTargetKind; id: string; x: number; z: number } => {
+    const liveTowers: ActiveTower[] = [];
+    activeTowersRef.current.forEach(({ towerState }) => {
+      if (towerState.hp > 0) liveTowers.push(towerState);
+    });
+    const liveFacilities = activeFacilitiesRef.current.filter((f) => f.status.alive);
+
+    const roll = Math.random();
+    const towerChance = preferValuable ? 0.46 : 0.32;
+    const facChance = liveFacilities.length > 0 ? (preferValuable ? 0.30 : 0.24) : 0;
+
+    if (liveTowers.length > 0 && roll < towerChance) {
+      if (preferValuable) {
+        // High-altitude jets & bombers prioritize Radars, S-400s, Patriots & high-tier batteries
+        let bestWeight = 0;
+        const weights = liveTowers.map((t) => {
+          const w =
+            t.tower.shape === 'radar_dish'
+              ? 4.2
+              : t.tower.tier >= 4
+                ? 4.0
+                : t.tower.tier === 3
+                  ? 2.8
+                  : 1.4;
+          bestWeight += w;
+          return w;
+        });
+        let r = Math.random() * bestWeight;
+        for (let i = 0; i < liveTowers.length; i++) {
+          r -= weights[i];
+          if (r <= 0) {
+            return { kind: 'tower', id: liveTowers[i].instanceId, x: liveTowers[i].x, z: liveTowers[i].z };
+          }
+        }
+      }
+      const chosen = liveTowers[Math.floor(Math.random() * liveTowers.length)];
+      return { kind: 'tower', id: chosen.instanceId, x: chosen.x, z: chosen.z };
+    }
+
+    if (liveFacilities.length > 0 && roll < towerChance + facChance) {
+      const chosen = liveFacilities[Math.floor(Math.random() * liveFacilities.length)];
+      return { kind: 'facility', id: chosen.status.id, x: chosen.status.x, z: chosen.status.z };
+    }
+
+    return {
+      kind: 'hq',
+      id: 'hq',
+      x: (Math.random() - 0.5) * 1.4,
+      z: (Math.random() - 0.5) * 1.4,
+    };
+  };
+
   // Helper: Acquire pooled enemy bomb / standoff air-to-surface missile (ZERO allocations!)
   const spawnEnemyOrdnance = (
     x: number,
@@ -867,10 +963,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     hp: number,
     speed: number,
     isBomb: boolean,
-    simSec: number
+    simSec: number,
+    target?: { kind: GroundTargetKind; id: string; x: number; z: number }
   ) => {
     const pools = poolsRef.current;
     if (!pools) return;
+    const tgt = target ?? pickGroundTarget(true);
     for (let i = 0; i < pools.ordnances.length; i++) {
       const slot = pools.ordnances[i];
       if (!slot.active) {
@@ -886,16 +984,78 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         slot.damage = damage;
         slot.speed = speed;
         slot.age = 0;
-        slot.maxAge = 7.5;
+        slot.maxAge = isBomb ? 10.5 : 8.5;
         slot.lastSmokeTime = simSec;
         slot.isBomb = isBomb;
+        slot.targetKind = tgt.kind;
+        slot.targetId = tgt.id;
+        slot.targetX = tgt.x;
+        slot.targetZ = tgt.z;
         slot.mesh.position.set(x, y, z);
-        slot.mesh.scale.setScalar(isBomb ? 0.92 : 1.05);
+        slot.mesh.scale.setScalar(isBomb ? 0.64 : 0.72);
         slot.mesh.lookAt(x + initVx, y + initVy, z + initVz);
         slot.mesh.visible = true;
         return;
       }
     }
+  };
+
+  // Helper: Predictive ballistic lead intercept calculation for autocannons & machine guns (ZERO homing!)
+  const computeBallisticLead = (
+    sx: number,
+    sy: number,
+    sz: number,
+    tx: number,
+    ty: number,
+    tz: number,
+    tvx: number,
+    tvy: number,
+    tvz: number,
+    bulletSpeed: number,
+    spreadRadius: number
+  ) => {
+    const invSpd = 1 / Math.max(1, bulletSpeed);
+    const t1 = Math.min(1.25, Math.hypot(tx - sx, ty - sy, tz - sz) * invSpd);
+    const px1 = tx + tvx * t1;
+    const py1 = ty + tvy * t1;
+    const pz1 = tz + tvz * t1;
+    const t2 = Math.min(1.25, Math.hypot(px1 - sx, py1 - sy, pz1 - sz) * invSpd);
+    return {
+      x: tx + tvx * t2 + (Math.random() - 0.5) * spreadRadius * 2,
+      y: Math.max(0.95, ty + tvy * t2 + (Math.random() - 0.5) * spreadRadius * 1.35),
+      z: tz + tvz * t2 + (Math.random() - 0.5) * spreadRadius * 2,
+    };
+  };
+
+  // Helper: Exact 3D point-to-segment squared distance (zero allocation, prevents high-speed bullet tunneling)
+  const distPointToSegmentSq = (
+    px: number,
+    py: number,
+    pz: number,
+    ax: number,
+    ay: number,
+    az: number,
+    bx: number,
+    by: number,
+    bz: number
+  ): number => {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const abz = bz - az;
+    const abLenSq = abx * abx + aby * aby + abz * abz;
+    if (abLenSq < 0.000001) {
+      const dx = px - ax;
+      const dy = py - ay;
+      const dz = pz - az;
+      return dx * dx + dy * dy + dz * dz;
+    }
+    let t = ((px - ax) * abx + (py - ay) * aby + (pz - az) * abz) / abLenSq;
+    if (t < 0) t = 0;
+    else if (t > 1) t = 1;
+    const cx = ax + abx * t - px;
+    const cy = ay + aby * t - py;
+    const cz = az + abz * t - pz;
+    return cx * cx + cy * cy + cz * cz;
   };
 
   // Helper: Acquire pooled bullet or maneuvering SAM interceptor missile (supports aircraft & enemy ordnance!)
@@ -913,16 +1073,28 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     maxLifetime: number,
     simSec: number,
     isHeavySam = false,
-    targetOrdnanceIdx = -1
+    targetOrdnanceIdx = -1,
+    radarGuided = false,
+    isStrategicSam = false,
+    guidanceMode?: ProjectileGuidanceMode
   ) => {
     const pools = poolsRef.current;
     if (!pools) return;
     const list = type === 'bullet' ? pools.bullets : pools.missiles;
+    const resolvedGuidance: ProjectileGuidanceMode =
+      guidanceMode ??
+      (type === 'bullet'
+        ? 'ballistic'
+        : isHeavySam || isStrategicSam || radarGuided
+          ? 'radar_sam'
+          : 'short_rocket');
 
     for (let i = 0; i < list.length; i++) {
       const slot = list[i];
       if (!slot.active) {
         slot.active = true;
+        slot.guidanceMode = resolvedGuidance;
+        slot.selfDestructAt = -1;
         slot.x = spawnX;
         slot.y = spawnY;
         slot.z = spawnZ;
@@ -937,6 +1109,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         slot.age = 0;
         slot.maxLifetime = maxLifetime;
         slot.lastSmokeTime = simSec;
+        slot.radarGuided = radarGuided;
+        slot.isStrategicSam = isStrategicSam;
 
         const dx = targetX - spawnX;
         const dy = targetY - spawnY;
@@ -947,31 +1121,47 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         const nz = dz / dist;
 
         if (type === 'missile') {
-          // Angled SAM boost + slight lateral flare so interceptors arc naturally onto target
-          const sideSign = Math.random() > 0.5 ? 1 : -1;
-          const perpX = -nz * sideSign;
-          const perpZ = nx * sideSign;
-          const flare = isHeavySam ? 0.36 : 0.24;
-          const loft = isHeavySam ? 0.44 : 0.26;
-          const ivx = nx + perpX * flare;
-          const ivy = ny + loft;
-          const ivz = nz + perpZ * flare;
-          const ilen = Math.max(0.01, Math.hypot(ivx, ivy, ivz));
-          slot.vx = (ivx / ilen) * speed;
-          slot.vy = (ivy / ilen) * speed;
-          slot.vz = (ivz / ilen) * speed;
-          slot.weavePhase = Math.random() * Math.PI * 2;
-          slot.weaveFreq = isHeavySam ? 5.2 : 7.0;
-          slot.weaveAmp = isHeavySam ? 1.65 : 1.05;
-          slot.turnRate = isHeavySam ? 5.8 : 7.8;
+          if (isStrategicSam) {
+            // S-400 / THAAD Vertical Cold-Launch: blasts straight upward out of canister, then pitches hard onto target!
+            const ivx = nx * 0.24;
+            const ivy = 1.15;
+            const ivz = nz * 0.24;
+            const ilen = Math.max(0.01, Math.hypot(ivx, ivy, ivz));
+            slot.vx = (ivx / ilen) * speed;
+            slot.vy = (ivy / ilen) * speed;
+            slot.vz = (ivz / ilen) * speed;
+            slot.weavePhase = Math.random() * Math.PI * 2;
+            slot.weaveFreq = 3.2;
+            slot.weaveAmp = 0.65;
+            slot.turnRate = 9.4;
+          } else {
+            // Angled SAM boost + slight lateral flare so interceptors arc naturally onto target
+            const sideSign = Math.random() > 0.5 ? 1 : -1;
+            const perpX = -nz * sideSign;
+            const perpZ = nx * sideSign;
+            const flare = isHeavySam ? 0.34 : 0.2;
+            const loft = isHeavySam ? 0.42 : 0.24;
+            const ivx = nx + perpX * flare;
+            const ivy = ny + loft;
+            const ivz = nz + perpZ * flare;
+            const ilen = Math.max(0.01, Math.hypot(ivx, ivy, ivz));
+            slot.vx = (ivx / ilen) * speed;
+            slot.vy = (ivy / ilen) * speed;
+            slot.vz = (ivz / ilen) * speed;
+            slot.weavePhase = Math.random() * Math.PI * 2;
+            slot.weaveFreq = isHeavySam ? 5.2 : 6.4;
+            slot.weaveAmp = isHeavySam ? 1.35 : 0.72;
+            slot.turnRate = isHeavySam ? 5.8 : 6.4;
+          }
         } else {
+          // Pure straight-line ballistic round (ZERO homing!)
           slot.vx = nx * speed;
           slot.vy = ny * speed;
           slot.vz = nz * speed;
           slot.weavePhase = 0;
           slot.weaveFreq = 0;
           slot.weaveAmp = 0;
-          slot.turnRate = 20;
+          slot.turnRate = 0;
           if (sharedAssetsRef.current) {
             (slot.mesh as THREE.Mesh).material = isHeavySam
               ? sharedAssetsRef.current.allyBulletMat
@@ -980,7 +1170,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         }
 
         slot.mesh.position.set(spawnX, spawnY, spawnZ);
-        slot.mesh.scale.setScalar(type === 'missile' && isHeavySam ? 1.12 : 0.94);
+        slot.mesh.scale.setScalar(
+          type === 'missile' ? (isStrategicSam ? 0.98 : isHeavySam ? 0.84 : 0.68) : 0.92
+        );
         slot.mesh.lookAt(spawnX + slot.vx, spawnY + slot.vy, spawnZ + slot.vz);
         slot.mesh.visible = true;
         return;
@@ -1034,40 +1226,6 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     return primaryIdx;
   };
 
-  // Helper: Acquire pooled dual-layer laser beam
-  const spawnPooledLaser = (
-    spawnPos: THREE.Vector3,
-    targetPos: THREE.Vector3,
-    towerLevel: number,
-    expiresAt: number
-  ) => {
-    const pools = poolsRef.current;
-    if (!pools) return;
-
-    for (let i = 0; i < pools.lasers.length; i++) {
-      const slot = pools.lasers[i];
-      if (!slot.active) {
-        const beamLen = Math.max(0.2, spawnPos.distanceTo(targetPos));
-        const midX = (spawnPos.x + targetPos.x) * 0.5;
-        const midY = (spawnPos.y + targetPos.y) * 0.5;
-        const midZ = (spawnPos.z + targetPos.z) * 0.5;
-        const haloThickness = 1 + (towerLevel - 1) * 0.22;
-
-        slot.active = true;
-        slot.expiresAt = expiresAt;
-        slot.coreMesh.scale.set(1, 1, beamLen);
-        slot.haloMesh.scale.set(haloThickness, haloThickness, beamLen);
-        slot.coreMesh.position.set(midX, midY, midZ);
-        slot.haloMesh.position.set(midX, midY, midZ);
-        slot.coreMesh.lookAt(targetPos);
-        slot.haloMesh.lookAt(targetPos);
-        slot.coreMesh.visible = true;
-        slot.haloMesh.visible = true;
-        return;
-      }
-    }
-  };
-
   // Helper: Reset all pooled VFX slots without ever removing from scene or disposing
   const clearAllPools = () => {
     const pools = poolsRef.current;
@@ -1088,11 +1246,6 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     for (let i = 0; i < pools.flares.length; i++) {
       pools.flares[i].active = false;
       pools.flares[i].mesh.visible = false;
-    }
-    for (let i = 0; i < pools.lasers.length; i++) {
-      pools.lasers[i].active = false;
-      pools.lasers[i].coreMesh.visible = false;
-      pools.lasers[i].haloMesh.visible = false;
     }
     for (let i = 0; i < pools.muzzles.length; i++) {
       pools.muzzles[i].active = false;
@@ -1213,7 +1366,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     }
   };
 
-  // Helper: Place a detailed defense tower entity on the map with Tech Lab modifiers applied
+  // Helper: Place a detailed defense tower entity on the map with Tech Lab modifiers & structural HP
   const placeTowerEntity = (config: DefenseTower, x: number, z: number, targetBiome: MapBiome) => {
     const scene = sceneRef.current;
     if (!scene) return;
@@ -1221,12 +1374,22 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     const mods = techModifiersRef.current;
     const effectiveDamage = Math.round(config.damagePerShot * mods.damageMult);
     const effectiveRange = Math.round(config.range * mods.rangeMult);
+    const armorBonusMult = 1 + Math.max(0, mods.maxBaseHp - 850) / 1900;
+    const towerMaxHp = Math.round((config.maxHp ?? 170) * armorBonusMult);
 
     const instanceId = 'tower_' + Math.random().toString(36).substring(2, 9);
     const gy = getGroundHeight(x, z, targetBiome);
     const rig = buildTower3D(config, 1);
     rig.group.position.set(x, gy, z);
     scene.add(rig.group);
+
+    // Floating structural HP bar (stays hidden until tower takes damage!)
+    const healthBar = createHealthBarBillboard(towerMaxHp, 'small');
+    const invScale = 1 / Math.max(0.25, rig.group.scale.x);
+    healthBar.mesh.scale.setScalar(invScale);
+    healthBar.mesh.position.set(0, 2.75 * invScale, 0);
+    healthBar.mesh.visible = false;
+    rig.group.add(healthBar.mesh);
 
     const isRadar = config.shape === 'radar_dish';
     const ringRadius = isRadar ? getRadarCoverageRadius(1, mods.rangeMult) : effectiveRange * 0.12;
@@ -1251,6 +1414,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       y: gy,
       z,
       level: 1,
+      hp: towerMaxHp,
+      maxHp: towerMaxHp,
       damage: effectiveDamage,
       range: effectiveRange,
       fireRate: config.fireRate,
@@ -1264,7 +1429,15 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     };
 
     rig.group.userData = { instanceId, category: 'tower' };
-    activeTowersRef.current.set(instanceId, { towerState: activeTower, rig, rangeMesh, muzzleCursor: 0 });
+    activeTowersRef.current.set(instanceId, {
+      towerState: activeTower,
+      rig,
+      rangeMesh,
+      healthBar,
+      lastSmokeTime: 0,
+      muzzleCursor: 0,
+      shotCounter: 0,
+    });
     refreshTowerRadarLinks();
     syncRangeRingVisibility();
   };
@@ -1307,11 +1480,17 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       rig.group.position.set(towerState.x, gy, towerState.z);
       rangeMesh.position.set(towerState.x, gy + 0.14, towerState.z);
     });
+    activeFacilitiesRef.current.forEach((fac) => {
+      const gy = getGroundHeight(fac.status.x, fac.status.z, targetBiome);
+      fac.rig.group.position.set(fac.status.x, gy, fac.status.z);
+    });
   };
 
   // Helper: Clear combat entities & initialize a StageConfig cleanly
   const setupStageBoard = useCallback((stage: StageConfig, activeBiome: MapBiome) => {
     const scene = sceneRef.current;
+    const spawnedFacilityStatuses: BaseFacilityStatus[] = [];
+
     if (scene) {
       activeEnemiesRef.current.forEach(({ rig }) => {
         scene.remove(rig.group);
@@ -1342,6 +1521,39 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       });
       activeTowersRef.current.clear();
 
+      // Tear down previous secondary base facilities
+      activeFacilitiesRef.current.forEach(({ rig }) => {
+        scene.remove(rig.group);
+        disposeObject3D(rig.group);
+      });
+      activeFacilitiesRef.current = [];
+
+      // Deploy destructible secondary facilities (2 Bunkers + 1 Fuel Depot) on special/hard/boss stages
+      if (stage.secondaryObjectives && stage.secondaryObjectives.facilities.length > 0) {
+        const armorBoost = 1 + Math.max(0, techModifiersRef.current.maxBaseHp - 850) / 2100;
+        stage.secondaryObjectives.facilities.forEach((spec) => {
+          const maxHp = Math.round(spec.maxHp * armorBoost);
+          const rig = buildSecondaryFacility3D(spec.kind, maxHp);
+          const gy = getGroundHeight(spec.x, spec.z, activeBiome);
+          rig.group.position.set(spec.x, gy, spec.z);
+          if (spec.x < 0) rig.group.rotation.y = Math.PI * 0.5;
+          else if (spec.x > 0) rig.group.rotation.y = -Math.PI * 0.5;
+          scene.add(rig.group);
+          const status: BaseFacilityStatus = {
+            id: spec.id,
+            kind: spec.kind,
+            titleFa: spec.titleFa,
+            hp: maxHp,
+            maxHp,
+            alive: true,
+            x: spec.x,
+            z: spec.z,
+          };
+          activeFacilitiesRef.current.push({ status, rig, lastSmokeTime: 0 });
+          spawnedFacilityStatuses.push({ ...status });
+        });
+      }
+
       stage.starterTowers.forEach(({ towerId, x, z }) => {
         const cfg = DEFENSE_TOWERS.find((t) => t.id === towerId);
         if (cfg) placeTowerEntity(cfg, x, z, activeBiome);
@@ -1356,6 +1568,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     endlessScoreRef.current = 0;
     bunkerShieldTimerRef.current = 0;
     setBaseHp(startHp);
+    setDefeatReason('hq_destroyed');
+    setFacilities(spawnedFacilityStatuses);
+    setTacticalAlert(null);
     setCash(stage.startingCash + mods.startingCashBonus);
     setCurrentWaveIndex(0);
     setEndlessScore(0);
@@ -1409,9 +1624,18 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     scene.fog = new THREE.FogExp2(initialCfg.fogColor, initialCfg.fogDensity);
     sceneRef.current = scene;
 
-    const aspect = Math.max(1, container.clientWidth) / Math.max(1, container.clientHeight);
-    const camera = new THREE.PerspectiveCamera(54, aspect, 0.5, 420);
+    const initW = Math.max(1, container.clientWidth);
+    const initH = Math.max(1, container.clientHeight);
+    const aspect = initW / initH;
+    const initShortLandscape = initH <= 540 && initW > initH;
+    const camera = new THREE.PerspectiveCamera(initShortLandscape ? 58 : 54, aspect, 0.5, 420);
     cameraRef.current = camera;
+    if (initShortLandscape) {
+      cameraState.current.distance = aspect > 2.0 ? 58 : 61;
+      cameraState.current.goalDistance = cameraState.current.distance;
+      cameraState.current.pitch = 37 * (Math.PI / 180);
+      cameraState.current.goalPitch = cameraState.current.pitch;
+    }
     applyCameraTransform();
 
     const renderer = new THREE.WebGLRenderer({
@@ -1453,11 +1677,6 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     const ordnanceNoseGeo = new THREE.ConeGeometry(0.12, 0.32, 6);
     ordnanceNoseGeo.rotateX(Math.PI / 2);
 
-    const laserCoreGeo = new THREE.CylinderGeometry(0.075, 0.075, 1.0, 6);
-    laserCoreGeo.rotateX(Math.PI / 2);
-    const laserHaloGeo = new THREE.CylinderGeometry(0.22, 0.22, 1.0, 6);
-    laserHaloGeo.rotateX(Math.PI / 2);
-
     const sharedAssets: SharedCombatAssets = {
       bulletGeo,
       bulletMat: new THREE.MeshBasicMaterial({ color: 0xfef08a }),
@@ -1469,16 +1688,6 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       missileFinMat: new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5, metalness: 0.6 }),
       missileFlameGeo,
       missileFlameMat: new THREE.MeshBasicMaterial({ color: 0xff7b00 }),
-      laserCoreGeo,
-      laserCoreMat: new THREE.MeshBasicMaterial({ color: 0xe0f2fe }),
-      laserHaloGeo,
-      laserHaloMat: new THREE.MeshBasicMaterial({
-        color: 0x22d3ee,
-        transparent: true,
-        opacity: 0.42,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      }),
       muzzleFlashGeo: new THREE.OctahedronGeometry(0.65, 0),
       muzzleFlashMats: [
         new THREE.MeshBasicMaterial({
@@ -1535,6 +1744,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       bullets.push({
         active: false,
         type: 'bullet',
+        guidanceMode: 'ballistic',
+        selfDestructAt: -1,
         mesh,
         x: 0,
         y: 0,
@@ -1548,7 +1759,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         targetEnemyId: '',
         targetOrdnanceIdx: -1,
         targetFlareIdx: -1,
-        speed: 46,
+        speed: 58,
         damage: 0,
         age: 0,
         maxLifetime: 1,
@@ -1556,7 +1767,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         weavePhase: 0,
         weaveFreq: 0,
         weaveAmp: 0,
-        turnRate: 20,
+        turnRate: 0,
+        radarGuided: false,
+        isStrategicSam: false,
       });
     }
 
@@ -1576,6 +1789,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       missiles.push({
         active: false,
         type: 'missile',
+        guidanceMode: 'short_rocket',
+        selfDestructAt: -1,
         mesh: mGroup,
         x: 0,
         y: 0,
@@ -1598,6 +1813,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         weaveFreq: 6,
         weaveAmp: 1.5,
         turnRate: 6,
+        radarGuided: false,
+        isStrategicSam: false,
       });
     }
 
@@ -1633,19 +1850,11 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         maxAge: 7.5,
         lastSmokeTime: 0,
         isBomb: true,
+        targetKind: 'hq',
+        targetId: 'hq',
+        targetX: 0,
+        targetZ: 0,
       });
-    }
-
-    const lasers: PooledLaserSlot[] = [];
-    for (let i = 0; i < POOL_LASERS; i++) {
-      const coreMesh = new THREE.Mesh(sharedAssets.laserCoreGeo, sharedAssets.laserCoreMat);
-      const haloMesh = new THREE.Mesh(sharedAssets.laserHaloGeo, sharedAssets.laserHaloMat);
-      coreMesh.visible = false;
-      haloMesh.visible = false;
-      coreMesh.frustumCulled = false;
-      haloMesh.frustumCulled = false;
-      poolContainer.add(coreMesh, haloMesh);
-      lasers.push({ active: false, coreMesh, haloMesh, expiresAt: 0 });
     }
 
     const muzzles: PooledMuzzleSlot[] = [];
@@ -1726,7 +1935,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       });
     }
 
-    poolsRef.current = { bullets, missiles, ordnances, flares, lasers, muzzles, smokes, particles, shockwaves };
+    poolsRef.current = { bullets, missiles, ordnances, flares, muzzles, smokes, particles, shockwaves };
 
     // Pre-allocate 2 Friendly Scramble CAP Interceptor Jets (ZERO runtime allocation!)
     const capFighters: CapFighterState[] = [];
@@ -1890,6 +2099,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           collidesWithTower = true;
         }
       });
+      for (let fi = 0; fi < activeFacilitiesRef.current.length; fi++) {
+        const fac = activeFacilitiesRef.current[fi].status;
+        if (Math.hypot(gx - fac.x, gz - fac.z) < 3.6) {
+          collidesWithTower = true;
+          break;
+        }
+      }
 
       const isValid = isBuildableSpot(gx, gz, biomeRef.current) && !collidesWithTower;
       placementValidRef.current = isValid;
@@ -1950,7 +2166,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
       if (isTouch && raycaster.ray.intersectPlane(_groundPlane, _hitPoint)) {
         let closestEntry: { towerState: ActiveTower } | null = null;
-        let closestDist = 2.9;
+        let closestDist = 3.6;
         activeTowersRef.current.forEach((entry) => {
           const d = Math.hypot(entry.towerState.x - _hitPoint.x, entry.towerState.z - _hitPoint.z);
           if (d < closestDist) {
@@ -2078,7 +2294,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           cameraState.current.transitioning = false;
           cameraState.current.distance = Math.max(
             18,
-            Math.min(112, cameraState.current.distance + deltaPinch * 0.14)
+            Math.min(115, cameraState.current.distance + deltaPinch * 0.16)
           );
           applyCameraTransform();
         }
@@ -2173,6 +2389,23 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       frameId = window.setTimeout(poll, 5);
     }
 
+    const triggerMissionDefeat = (reason: DefeatReason) => {
+      if (defeatTriggeredRef.current) return;
+      defeatTriggeredRef.current = true;
+      isSpawningRef.current = false;
+      setDefeatReason(reason);
+      if (gameModeRef.current === 'endless') {
+        onEndlessRecordUpdateRef.current(
+          biomeRef.current,
+          Math.max(1, currentWaveIndexRef.current),
+          endlessScoreRef.current
+        );
+      }
+      setWaveState('defeat');
+      soundManager.setMusicMode('prep');
+      soundManager.playDefeatHorn();
+    };
+
     const applyBaseDamage = (
       damage: number,
       ix: number,
@@ -2188,65 +2421,178 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       const nextHp = Math.max(0, baseHpRef.current - damage);
       baseHpRef.current = nextHp;
       setBaseHp(nextHp);
-      if (nextHp <= 0 && !defeatTriggeredRef.current) {
-        defeatTriggeredRef.current = true;
-        isSpawningRef.current = false;
-        if (gameModeRef.current === 'endless') {
-          onEndlessRecordUpdateRef.current(
-            biomeRef.current,
-            Math.max(1, currentWaveIndexRef.current),
-            endlessScoreRef.current
-          );
-        }
-        setWaveState('defeat');
-        soundManager.setMusicMode('prep');
-        soundManager.playDefeatHorn();
+      if (nextHp <= 0) {
+        triggerMissionDefeat('hq_destroyed');
       }
+    };
+
+    // Destructible Defense Tower Damage & Permanent Destruction (Rebuild from Scratch!)
+    const applyTowerDamage = (towerId: string, damage: number, ix: number, iy: number, iz: number) => {
+      const entry = activeTowersRef.current.get(towerId);
+      if (!entry) {
+        applyBaseDamage(Math.round(damage * 0.45), ix, iy, iz, 1.0, 0.2);
+        return;
+      }
+      const ts = entry.towerState;
+      ts.hp = Math.max(0, ts.hp - damage);
+      entry.healthBar.mesh.visible = ts.hp < ts.maxHp;
+      entry.healthBar.updateHp(ts.hp, ts.maxHp);
+
+      triggerExplosion(ix, Math.max(1.1, iy), iz, ts.hp <= 0 ? 1.85 : 0.95);
+      addCameraShake(ts.hp <= 0 ? 0.36 : 0.16);
+
+      if (ts.hp <= 0) {
+        soundManager.playExplosion(1.35);
+        spawnShockwaveRing(ts.x, ts.y + 0.35, ts.z, 0xf97316, 0.6, 5.2, 0.55);
+        scene.remove(entry.rig.group);
+        disposeObject3D(entry.rig.group);
+        scene.remove(entry.rangeMesh);
+        entry.rangeMesh.geometry.dispose();
+        (entry.rangeMesh.material as THREE.Material).dispose();
+        activeTowersRef.current.delete(towerId);
+        refreshTowerRadarLinks();
+        if (selectedPlacedTowerRef.current?.instanceId === towerId) {
+          setSelectedPlacedTower(null);
+        }
+        pushTacticalAlert(`برجک ${ts.tower.persianName ?? ts.tower.name} نابود شد — سکو آزاد شد`);
+      } else {
+        soundManager.playBaseHit();
+        if (selectedPlacedTowerRef.current?.instanceId === towerId) {
+          setSelectedPlacedTower({ ...ts });
+        }
+      }
+    };
+
+    // Destructible Secondary Facilities (2 Reinforced Bunkers + 1 Fuel & Power Depot)
+    const applyFacilityDamage = (facilityId: string, damage: number, ix: number, iy: number, iz: number) => {
+      const fac = activeFacilitiesRef.current.find((f) => f.status.id === facilityId);
+      if (!fac || !fac.status.alive) {
+        applyBaseDamage(Math.round(damage * 0.5), ix, iy, iz, 1.05, 0.22);
+        return;
+      }
+
+      fac.status.hp = Math.max(0, fac.status.hp - damage);
+      fac.rig.healthBar.updateHp(fac.status.hp, fac.status.maxHp);
+
+      const isFuel = fac.status.kind === 'fuel_depot';
+      if (fac.status.hp <= 0) {
+        fac.status.alive = false;
+        fac.rig.setDestroyed();
+        triggerExplosion(fac.status.x, Math.max(1.5, iy), fac.status.z, isFuel ? 2.65 : 2.1);
+        spawnShockwaveRing(
+          fac.status.x,
+          getGroundHeight(fac.status.x, fac.status.z, biomeRef.current) + 0.5,
+          fac.status.z,
+          isFuel ? 0xef4444 : 0xf97316,
+          0.9,
+          isFuel ? 10.5 : 7.2,
+          0.75
+        );
+        soundManager.playExplosion(isFuel ? 1.9 : 1.55);
+        addCameraShake(isFuel ? 0.58 : 0.44);
+        pushTacticalAlert(`${fac.status.titleFa} منهدم شد!`);
+      } else {
+        triggerExplosion(ix, Math.max(1.2, iy), iz, 1.05);
+        soundManager.playBaseHit();
+        addCameraShake(0.2);
+      }
+
+      const snapshot = activeFacilitiesRef.current.map((f) => ({ ...f.status }));
+      setFacilities(snapshot);
+
+      const anyAlive = activeFacilitiesRef.current.some((f) => f.status.alive);
+      if (!anyAlive && stageConfigRef.current.secondaryObjectives?.failOnAllLost) {
+        triggerMissionDefeat('facilities_lost');
+      }
+    };
+
+    const resolveGroundTargetPos = (
+      kind: GroundTargetKind,
+      id: string,
+      fallbackX: number,
+      fallbackZ: number
+    ): { kind: GroundTargetKind; id: string; x: number; y: number; z: number } => {
+      if (kind === 'tower') {
+        const t = activeTowersRef.current.get(id);
+        if (t && t.towerState.hp > 0) {
+          return { kind: 'tower', id, x: t.towerState.x, y: t.towerState.y + 1.15, z: t.towerState.z };
+        }
+      } else if (kind === 'facility') {
+        const f = activeFacilitiesRef.current.find((fac) => fac.status.id === id && fac.status.alive);
+        if (f) {
+          return {
+            kind: 'facility',
+            id,
+            x: f.status.x,
+            y: getGroundHeight(f.status.x, f.status.z, biomeRef.current) + 1.25,
+            z: f.status.z,
+          };
+        }
+      }
+      return {
+        kind: 'hq',
+        id: 'hq',
+        x: fallbackX * 0.2,
+        y: getGroundHeight(0, 0, biomeRef.current) + 1.65,
+        z: fallbackZ * 0.2,
+      };
     };
 
     const updateEnemyOrdnancePool = (dt: number, simSec: number) => {
       const pools = poolsRef.current;
       if (!pools) return;
       const ordnances = pools.ordnances;
-      const baseY = getGroundHeight(0, 0, biomeRef.current) + 1.65;
 
       for (let i = 0; i < ordnances.length; i++) {
         const ord = ordnances[i];
         if (!ord.active) continue;
 
         ord.age += dt;
-        const dx = -ord.x;
-        const dy = baseY - ord.y;
-        const dz = -ord.z;
-        const dist = Math.hypot(dx, dy, dz);
+        const resolved = resolveGroundTargetPos(ord.targetKind, ord.targetId, ord.targetX, ord.targetZ);
+        ord.targetKind = resolved.kind;
+        ord.targetId = resolved.id;
+        ord.targetX = resolved.x;
+        ord.targetZ = resolved.z;
 
-        if (dist < 2.05 || ord.age >= ord.maxAge) {
+        const dx = resolved.x - ord.x;
+        const dy = resolved.y - ord.y;
+        const dz = resolved.z - ord.z;
+        const dist = Math.hypot(dx, dy, dz);
+        const groundY = getGroundHeight(ord.x, ord.z, biomeRef.current);
+
+        if (dist < 2.1 || ord.y <= groundY + 0.85 || ord.age >= ord.maxAge) {
           ord.active = false;
           ord.mesh.visible = false;
-          applyBaseDamage(
-            ord.damage,
-            ord.x,
-            ord.y,
-            ord.z,
-            ord.damage >= 50 ? 1.5 : 1.15,
-            ord.damage >= 50 ? 0.44 : 0.28
-          );
+          if (resolved.kind === 'tower') {
+            applyTowerDamage(resolved.id, ord.damage, ord.x, ord.y, ord.z);
+          } else if (resolved.kind === 'facility') {
+            applyFacilityDamage(resolved.id, ord.damage, ord.x, ord.y, ord.z);
+          } else {
+            applyBaseDamage(
+              ord.damage,
+              ord.x,
+              ord.y,
+              ord.z,
+              ord.damage >= 50 ? 1.5 : 1.15,
+              ord.damage >= 50 ? 0.44 : 0.28
+            );
+          }
           continue;
         }
 
-        // Smooth homing dive curve from aircraft release velocity onto HQ bunker
+        // High-altitude gravity-arc bomb drop OR powered air-to-surface missile homing curve
         const nx = dx / Math.max(0.01, dist);
         const ny = dy / Math.max(0.01, dist);
         const nz = dz / Math.max(0.01, dist);
-        const desiredSpeed = ord.speed * (ord.isBomb ? 1 + Math.min(0.45, ord.age * 0.28) : 1.12);
-        const guideRate = ord.isBomb ? 2.8 + (dist < 10 ? 2.5 : 0) : 4.2 + (dist < 10 ? 3.2 : 0);
+        const desiredSpeed = ord.speed * (ord.isBomb ? 1 + Math.min(0.85, ord.age * 0.42) : 1.14);
+        const guideRate = ord.isBomb ? 2.1 + (dist < 12 ? 3.4 : 0) : 4.2 + (dist < 10 ? 3.2 : 0);
         const blend = 1 - Math.exp(-guideRate * dt);
         ord.vx += (nx * desiredSpeed - ord.vx) * blend;
-        ord.vy += (ny * desiredSpeed - ord.vy) * blend;
+        ord.vy += (ny * desiredSpeed - ord.vy) * blend - (ord.isBomb ? 6.8 * dt : 0);
         ord.vz += (nz * desiredSpeed - ord.vz) * blend;
 
         ord.x += ord.vx * dt;
-        ord.y = Math.max(1.1, ord.y + ord.vy * dt);
+        ord.y = Math.max(groundY + 0.5, ord.y + ord.vy * dt);
         ord.z += ord.vz * dt;
         ord.mesh.position.set(ord.x, ord.y, ord.z);
         ord.mesh.lookAt(ord.x + ord.vx, ord.y + ord.vy, ord.z + ord.vz);
@@ -2258,23 +2604,184 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       }
     };
 
+    // Trigger a short, crisp reactive evasive jink ONLY when a drone comes under fire (never dances before being shot at!)
+    const triggerDroneEvasion = (
+      entry: {
+        enemyState: ActiveEnemy;
+        doctrine: FlightDoctrine;
+        travelProgress: number;
+        evadeStart: number;
+        evadeUntil: number;
+        evadeCooldownUntil: number;
+        evadeDir: number;
+        evadeAmpLat: number;
+        evadeAmpVert: number;
+      },
+      simSec: number
+    ) => {
+      if (entry.doctrine !== 'swarm_kamikaze' && entry.doctrine !== 'recon_diver') return;
+      if (entry.travelProgress > 0.86) return;
+      if (simSec < entry.evadeUntil || simSec < entry.evadeCooldownUntil) return;
+
+      const isSmallAgile =
+        entry.enemyState.unit.id === 'shahed_136' || entry.enemyState.unit.id === 'switchblade_loiter';
+      const duration = isSmallAgile ? 0.85 + Math.random() * 0.35 : 0.95 + Math.random() * 0.35;
+      entry.evadeStart = simSec;
+      entry.evadeUntil = simSec + duration;
+      entry.evadeCooldownUntil = entry.evadeUntil + (isSmallAgile ? 1.8 + Math.random() * 0.65 : 2.1 + Math.random() * 0.7);
+      entry.evadeDir = Math.random() > 0.5 ? 1 : -1;
+      entry.evadeAmpLat = isSmallAgile ? 3.2 + Math.random() * 1.4 : 2.1 + Math.random() * 0.8;
+      entry.evadeAmpVert = isSmallAgile ? 1.15 + Math.random() * 0.65 : 0.8 + Math.random() * 0.45;
+    };
+
     const updateProjectilePool = (
       list: PooledProjectileSlot[],
       dt: number,
       simSec: number
     ) => {
       const pools = poolsRef.current;
+      const curBiome = biomeRef.current;
       for (let i = 0; i < list.length; i++) {
         const slot = list[i];
         if (!slot.active) continue;
 
         slot.age += dt;
+
+        // =========================================================================
+        // A) PURE BALLISTIC GUN ROUNDS (CIWS 20mm, Pantsir 30mm, CAP 20mm) — ZERO HOMING!
+        // =========================================================================
+        if (slot.type === 'bullet') {
+          const prevX = slot.x;
+          const prevY = slot.y;
+          const prevZ = slot.z;
+          const nextX = prevX + slot.vx * dt;
+          const nextY = prevY + slot.vy * dt;
+          const nextZ = prevZ + slot.vz * dt;
+
+          // Physical segment-vs-sphere hit check against falling enemy bombs/missiles
+          let hitHandled = false;
+          if (pools) {
+            for (let oi = 0; oi < pools.ordnances.length; oi++) {
+              const ord = pools.ordnances[oi];
+              if (!ord.active) continue;
+              const dSq = distPointToSegmentSq(ord.x, ord.y, ord.z, prevX, prevY, prevZ, nextX, nextY, nextZ);
+              if (dSq <= 1.35 * 1.35) {
+                slot.active = false;
+                slot.mesh.visible = false;
+                ord.hp -= slot.damage;
+                if (ord.hp <= 0) {
+                  ord.active = false;
+                  ord.mesh.visible = false;
+                  triggerExplosion(ord.x, ord.y, ord.z, 0.85);
+                } else {
+                  spawnMuzzleFlash(ord.x, ord.y, ord.z, 0.35, 0);
+                }
+                hitHandled = true;
+                break;
+              }
+            }
+          }
+          if (hitHandled) continue;
+
+          // Physical segment-vs-sphere hit check against live airborne enemies (can genuinely MISS if target jinks!)
+          let hitEnemyId = '';
+          let hitEnemyEntry:
+            | {
+                enemyState: ActiveEnemy;
+                rig: EnemyRig;
+                doctrine: FlightDoctrine;
+                travelProgress: number;
+                evadeStart: number;
+                evadeUntil: number;
+                evadeCooldownUntil: number;
+                evadeDir: number;
+                evadeAmpLat: number;
+                evadeAmpVert: number;
+              }
+            | undefined;
+          let bestHitDistSq = Infinity;
+
+          activeEnemiesRef.current.forEach((candEntry, candId) => {
+            const ce = candEntry.enemyState;
+            if (!ce.alive) return;
+            const hitR = ce.unit.isBoss
+              ? 2.75
+              : ce.unit.shape === 'enemy_fighter' || ce.unit.shape === 'jammer_orb' || ce.unit.shape === 'heavy_bomber'
+                ? 1.85
+                : 1.45;
+            const dSq = distPointToSegmentSq(ce.x, ce.y, ce.z, prevX, prevY, prevZ, nextX, nextY, nextZ);
+            // Near-miss tracer alert triggers sharp reactive drone evasion!
+            if (dSq <= 6.2 * 6.2) {
+              triggerDroneEvasion(candEntry, simSec);
+            }
+            if (dSq <= hitR * hitR && dSq < bestHitDistSq) {
+              bestHitDistSq = dSq;
+              hitEnemyId = candId;
+              hitEnemyEntry = candEntry;
+            }
+          });
+
+          if (hitEnemyId && hitEnemyEntry) {
+            slot.active = false;
+            slot.mesh.visible = false;
+            const hitEnemy = hitEnemyEntry.enemyState;
+            hitEnemy.currentHp -= slot.damage;
+            hitEnemyEntry.rig.healthBar.updateHp(hitEnemy.currentHp);
+            if (hitEnemy.currentHp <= 0) {
+              destroyEnemyEntry(hitEnemyId, hitEnemy.unit.isBoss ? 2.25 : 0.9);
+            } else {
+              triggerDroneEvasion(hitEnemyEntry, simSec);
+              spawnMuzzleFlash(hitEnemy.x, hitEnemy.y, hitEnemy.z, 0.28, 0);
+            }
+            continue;
+          }
+
+          // Check ground impact or max ballistic lifetime (true miss)
+          const groundY = getGroundHeight(nextX, nextZ, curBiome);
+          if (slot.age >= slot.maxLifetime || nextY <= groundY + 0.12) {
+            slot.active = false;
+            slot.mesh.visible = false;
+            continue;
+          }
+
+          slot.x = nextX;
+          slot.y = nextY;
+          slot.z = nextZ;
+          slot.mesh.position.set(nextX, nextY, nextZ);
+          slot.mesh.lookAt(nextX + slot.vx, nextY + slot.vy, nextZ + slot.vz);
+          continue;
+        }
+
+        // =========================================================================
+        // B) GUIDED MISSILES & MULTI-TUBE ROCKETS (REALISTIC CONE / AIRBURST PHYSICS)
+        // =========================================================================
         const targetFlare =
           slot.targetFlareIdx >= 0 && pools ? pools.flares[slot.targetFlareIdx] : undefined;
         const targetOrd =
           slot.targetOrdnanceIdx >= 0 && pools ? pools.ordnances[slot.targetOrdnanceIdx] : undefined;
         let targetEntry = slot.targetEnemyId ? activeEnemiesRef.current.get(slot.targetEnemyId) : undefined;
         let targetEnemy = targetEntry?.enemyState;
+
+        // If missile is coasting to mid-air self-destruct (proximity airburst after target already exploded)
+        if (slot.selfDestructAt > 0) {
+          slot.x += slot.vx * dt;
+          slot.y = Math.max(0.8, slot.y + slot.vy * dt);
+          slot.z += slot.vz * dt;
+          slot.mesh.position.set(slot.x, slot.y, slot.z);
+          slot.mesh.lookAt(slot.x + slot.vx, slot.y + slot.vy, slot.z + slot.vz);
+          if (simSec - slot.lastSmokeTime > 0.06) {
+            slot.lastSmokeTime = simSec;
+            spawnSmokePuff(slot.x, slot.y, slot.z, 0.17, 0.4);
+          }
+          if (simSec >= slot.selfDestructAt || slot.age >= slot.maxLifetime) {
+            slot.active = false;
+            slot.mesh.visible = false;
+            slot.selfDestructAt = -1;
+            spawnMuzzleFlash(slot.x, slot.y, slot.z, 0.44, 1);
+            spawnSmokePuff(slot.x, slot.y, slot.z, 0.3, 0.5);
+          }
+          continue;
+        }
 
         // If missile was deflected onto a thermal flare that already burned out, detonate harmlessly mid-air
         if (slot.targetFlareIdx >= 0 && (!targetFlare || !targetFlare.active)) {
@@ -2286,38 +2793,63 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           continue;
         }
 
-        // Smart mid-flight retargeting for SAM missiles so they NEVER fly aimlessly into empty sky!
+        // Realistic Target-Lost Behavior (NO supernatural 360-degree snap/U-turn across the sky!)
         if (
-          slot.type === 'missile' &&
           !(targetFlare && targetFlare.active) &&
           !(targetOrd && targetOrd.active) &&
           (!targetEnemy || !targetEnemy.alive)
         ) {
           slot.targetOrdnanceIdx = -1;
-          let nearestDist = 28;
-          let nearestId = '';
+          const vLen = Math.max(0.001, Math.hypot(slot.vx, slot.vy, slot.vz));
+          const fwdX = slot.vx / vLen;
+          const fwdY = slot.vy / vLen;
+          const fwdZ = slot.vz / vLen;
+
+          const isShortRocket = slot.guidanceMode === 'short_rocket';
+          // Short-range rockets (Iron Dome / Stinger / Pantsir SAM): ONLY catch target dead-ahead in tiny 20° cone <= 7.5m;
+          // Long-range active radar SAMs (358 / Patriot / S-400): forward 40° radar cone <= 15m.
+          const maxReacqDist = isShortRocket ? 7.5 : 15.0;
+          const minForwardDot = isShortRocket ? 0.94 : 0.77;
+
+          let bestDist = maxReacqDist;
+          let bestId = '';
           activeEnemiesRef.current.forEach((cand, cid) => {
-            if (!cand.enemyState.alive) return;
-            const dCand = Math.hypot(
-              cand.enemyState.x - slot.x,
-              cand.enemyState.y - slot.y,
-              cand.enemyState.z - slot.z
-            );
-            if (dCand < nearestDist) {
-              nearestDist = dCand;
-              nearestId = cid;
+            const ce = cand.enemyState;
+            if (!ce.alive) return;
+            if (
+              slot.isStrategicSam &&
+              !(
+                ce.unit.isHeavyStrategic ||
+                ce.unit.isBoss ||
+                ce.unit.shape === 'ballistic_missile' ||
+                ce.unit.shape === 'cruise_missile' ||
+                ce.unit.shape === 'enemy_fighter' ||
+                ce.y >= 13.5
+              )
+            ) {
+              return;
+            }
+            const cdx = ce.x - slot.x;
+            const cdy = ce.y - slot.y;
+            const cdz = ce.z - slot.z;
+            const dCand = Math.hypot(cdx, cdy, cdz);
+            if (dCand < bestDist && dCand > 0.2) {
+              const dot = (cdx * fwdX + cdy * fwdY + cdz * fwdZ) / dCand;
+              if (dot >= minForwardDot) {
+                bestDist = dCand;
+                bestId = cid;
+              }
             }
           });
-          if (nearestId) {
-            slot.targetEnemyId = nearestId;
-            targetEntry = activeEnemiesRef.current.get(nearestId);
+
+          if (bestId) {
+            slot.targetEnemyId = bestId;
+            targetEntry = activeEnemiesRef.current.get(bestId);
             targetEnemy = targetEntry?.enemyState;
           } else {
-            // Sky clear: clean flak airburst self-destruct instead of drifting into space
-            slot.active = false;
-            slot.mesh.visible = false;
-            spawnMuzzleFlash(slot.x, slot.y, slot.z, 0.42, 1);
-            spawnSmokePuff(slot.x, slot.y, slot.z, 0.28, 0.48);
+            // Natural proximity-fuse coast & mid-air self-destruct (airburst!)
+            slot.targetEnemyId = '';
+            slot.selfDestructAt = simSec + (isShortRocket ? 0.16 : 0.22);
             continue;
           }
         }
@@ -2340,7 +2872,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           slot.targetX = destX;
           slot.targetY = destY;
           slot.targetZ = destZ;
-        } else if (slot.type === 'missile' && targetEnemy && targetEnemy.alive) {
+        } else if (targetEnemy && targetEnemy.alive) {
           destX = targetEnemy.x;
           destY = targetEnemy.y;
           destZ = targetEnemy.z;
@@ -2354,9 +2886,14 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         let dz = destZ - slot.z;
         let dist = Math.hypot(dx, dy, dz);
 
-        // Balanced Countermeasure Flares: deflects ONLY the first incoming SAM missile when closing within 8.8m
+        // Incoming missile warning triggers reactive evasive jink on maneuverable drones!
+        if (targetEntry && targetEnemy && targetEnemy.alive && dist < 16.5) {
+          triggerDroneEvasion(targetEntry, simSec);
+        }
+
+        // Balanced Countermeasure Flares: deflects IR-guided SAMs only; active radar-guided S-400/THAAD interceptors are immune!
         if (
-          slot.type === 'missile' &&
+          !slot.radarGuided &&
           slot.targetFlareIdx < 0 &&
           targetEnemy &&
           targetEnemy.alive &&
@@ -2429,18 +2966,23 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           if (targetEnemy && targetEnemy.alive && targetEntry) {
             targetEnemy.currentHp -= slot.damage;
             targetEntry.rig.healthBar.updateHp(targetEnemy.currentHp);
+            if (slot.isStrategicSam) {
+              spawnShockwaveRing(impactX, impactY, impactZ, 0xfbbf24, 0.45, 3.2, 0.3);
+              triggerFlashLight(impactX, impactY, impactZ, 0xffaa33, 18, 0.16);
+            }
             if (targetEnemy.currentHp <= 0) {
               destroyEnemyEntry(
                 slot.targetEnemyId,
-                targetEnemy.unit.isBoss ? 2.25 : slot.type === 'missile' ? 1.35 : 0.9
+                targetEnemy.unit.isBoss ? 2.25 : slot.isStrategicSam ? 1.6 : 1.35
               );
-            } else if (slot.type === 'missile') {
-              spawnMuzzleFlash(targetEnemy.x, targetEnemy.y, targetEnemy.z, 0.5, 1);
+            } else {
+              triggerDroneEvasion(targetEntry, simSec);
+              spawnMuzzleFlash(targetEnemy.x, targetEnemy.y, targetEnemy.z, slot.isStrategicSam ? 0.78 : 0.5, 1);
             }
           }
 
           // Tech Lab Doctrine: Blast Warheads AoE Missile Splash Damage
-          const splashRadius = slot.type === 'missile' ? techModifiersRef.current.missileSplashRadius : 0;
+          const splashRadius = techModifiersRef.current.missileSplashRadius;
           if (splashRadius > 0) {
             spawnShockwaveRing(impactX, impactY, impactZ, 0xfb923c, 0.5, splashRadius * 0.88, 0.32);
             const splashDmg = Math.round(slot.damage * 0.55);
@@ -2471,58 +3013,49 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         }
 
         if (dist > 0.001) {
-          if (slot.type === 'missile') {
-            // Dynamic curved maneuvering homing with gentle lateral S-weave & vertical arch that tightens near target
-            const nx = dx / dist;
-            const ny = dy / dist;
-            const nz = dz / dist;
+          // Dynamic curved maneuvering homing with gentle lateral S-weave & vertical arch that tightens near target
+          const nx = dx / dist;
+          const ny = dy / dist;
+          const nz = dz / dist;
 
-            const weaveFade = Math.max(0, Math.min(1, (dist - 4.5) / 14));
-            const horizNorm = Math.max(0.01, Math.hypot(nx, nz));
-            const px = -nz / horizNorm;
-            const pz = nx / horizNorm;
-            const latWave = Math.sin(slot.age * slot.weaveFreq + slot.weavePhase) * slot.weaveAmp * weaveFade;
-            const vertWave = Math.cos(slot.age * (slot.weaveFreq * 0.72) + slot.weavePhase) * (slot.weaveAmp * 0.45) * weaveFade;
+          const weaveFade = Math.max(0, Math.min(1, (dist - 4.5) / 14));
+          const horizNorm = Math.max(0.01, Math.hypot(nx, nz));
+          const px = -nz / horizNorm;
+          const pz = nx / horizNorm;
+          const latWave = Math.sin(slot.age * slot.weaveFreq + slot.weavePhase) * slot.weaveAmp * weaveFade;
+          const vertWave = Math.cos(slot.age * (slot.weaveFreq * 0.72) + slot.weavePhase) * (slot.weaveAmp * 0.45) * weaveFade;
 
-            const desX = dx + px * latWave;
-            const desY = dy + vertWave;
-            const desZ = dz + pz * latWave;
-            const desLen = Math.max(0.01, Math.hypot(desX, desY, desZ));
+          const desX = dx + px * latWave;
+          const desY = dy + vertWave;
+          const desZ = dz + pz * latWave;
+          const desLen = Math.max(0.01, Math.hypot(desX, desY, desZ));
 
-            const tvx = (desX / desLen) * slot.speed;
-            const tvy = (desY / desLen) * slot.speed;
-            const tvz = (desZ / desLen) * slot.speed;
+          const tvx = (desX / desLen) * slot.speed;
+          const tvy = (desY / desLen) * slot.speed;
+          const tvz = (desZ / desLen) * slot.speed;
 
-            // Tighten steering aggressively when close to target so missiles never orbit/miss
-            const agility = slot.turnRate + (dist < 10 ? (10 - dist) * 1.45 : 0);
-            const blend = 1 - Math.exp(-agility * dt);
-            slot.vx += (tvx - slot.vx) * blend;
-            slot.vy += (tvy - slot.vy) * blend;
-            slot.vz += (tvz - slot.vz) * blend;
+          // Tighten steering when close to target with realistic G-limit turn rate
+          const agility = slot.turnRate + (dist < 10 ? (10 - dist) * 1.15 : 0);
+          const blend = 1 - Math.exp(-agility * dt);
+          slot.vx += (tvx - slot.vx) * blend;
+          slot.vy += (tvy - slot.vy) * blend;
+          slot.vz += (tvz - slot.vz) * blend;
 
-            // Normalize to constant interceptor cruise speed
-            const curSpd = Math.max(0.01, Math.hypot(slot.vx, slot.vy, slot.vz));
-            slot.vx = (slot.vx / curSpd) * slot.speed;
-            slot.vy = (slot.vy / curSpd) * slot.speed;
-            slot.vz = (slot.vz / curSpd) * slot.speed;
+          // Normalize to constant interceptor cruise speed
+          const curSpd = Math.max(0.01, Math.hypot(slot.vx, slot.vy, slot.vz));
+          slot.vx = (slot.vx / curSpd) * slot.speed;
+          slot.vy = (slot.vy / curSpd) * slot.speed;
+          slot.vz = (slot.vz / curSpd) * slot.speed;
 
-            slot.x += slot.vx * dt;
-            slot.y = Math.max(0.8, slot.y + slot.vy * dt);
-            slot.z += slot.vz * dt;
-            slot.mesh.position.set(slot.x, slot.y, slot.z);
-            slot.mesh.lookAt(slot.x + slot.vx, slot.y + slot.vy, slot.z + slot.vz);
+          slot.x += slot.vx * dt;
+          slot.y = Math.max(0.8, slot.y + slot.vy * dt);
+          slot.z += slot.vz * dt;
+          slot.mesh.position.set(slot.x, slot.y, slot.z);
+          slot.mesh.lookAt(slot.x + slot.vx, slot.y + slot.vy, slot.z + slot.vz);
 
-            if (simSec - slot.lastSmokeTime > 0.055) {
-              slot.lastSmokeTime = simSec;
-              spawnSmokePuff(slot.x, slot.y, slot.z, 0.18, 0.44);
-            }
-          } else {
-            const step = Math.min(dist, slot.speed * dt);
-            slot.x += (dx / dist) * step;
-            slot.y += (dy / dist) * step;
-            slot.z += (dz / dist) * step;
-            slot.mesh.position.set(slot.x, slot.y, slot.z);
-            slot.mesh.lookAt(destX, destY, destZ);
+          if (simSec - slot.lastSmokeTime > 0.055) {
+            slot.lastSmokeTime = simSec;
+            spawnSmokePuff(slot.x, slot.y, slot.z, 0.18, 0.44);
           }
         }
       }
@@ -2732,8 +3265,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
             goalX = leadX;
             goalZ = leadZ;
           }
-          goalY = Math.max(7.8, Math.min(18.5, te.y + 1.4));
-          speed = 21.5;
+          goalY = Math.max(8.2, Math.min(21.0, te.y + 1.2));
+          speed = 22.0;
         } else {
           // Crisp CAP racetrack patrol circle around the base perimeter
           f.orbitPhase += f.orbitDir * 0.62 * dt;
@@ -2780,11 +3313,24 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           const d3 = Math.hypot(te.x - f.x, te.y - f.y, te.z - f.z);
           const bearingDelta = Math.abs(normalizeAngle(Math.atan2(te.x - f.x, te.z - f.z) - f.heading));
 
-          // Rapid 20mm cyan autocannon burst in forward cone
-          if (d3 < 19 && bearingDelta < 0.58 && simSec - f.lastGunTime >= 0.21) {
+          // Rapid 20mm cyan ballistic autocannon burst with predictive lead (NO homing!)
+          if (d3 < 20 && bearingDelta < 0.58 && simSec - f.lastGunTime >= 0.21) {
             f.lastGunTime = simSec;
             const muzzleX = f.x + Math.sin(f.heading) * 1.35;
             const muzzleZ = f.z + Math.cos(f.heading) * 1.35;
+            const lead = computeBallisticLead(
+              muzzleX,
+              f.y - 0.1,
+              muzzleZ,
+              te.x,
+              te.y,
+              te.z,
+              targetEntry.velX,
+              targetEntry.velY,
+              targetEntry.velZ,
+              64,
+              0.3
+            );
             soundManager.playGatling();
             spawnMuzzleFlash(muzzleX, f.y - 0.1, muzzleZ, 0.36, 0);
             spawnPooledProjectile(
@@ -2792,16 +3338,19 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               muzzleX,
               f.y - 0.1,
               muzzleZ,
-              te.x,
-              te.y,
-              te.z,
+              lead.x,
+              lead.y,
+              lead.z,
               te.instanceId,
-              54,
-              Math.round(22 * dmgMult),
-              0.9,
+              64,
+              Math.round(24 * dmgMult),
+              0.85,
               simSec,
               true, // cyan allied tracer material
-              -1
+              -1,
+              false,
+              false,
+              'ballistic'
             );
           }
 
@@ -2912,27 +3461,38 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         const nf = THREE.MathUtils.damp(nightFactorRef.current, shouldBeNight ? 1 : 0, 1.35, dtRaw);
         nightFactorRef.current = nf;
 
-        // Smoothly modulate scene atmosphere, moonlight & bright night tracers (ZERO per-frame color allocation)
+        // True Night Operations atmosphere: deep midnight sky/fog, lowered IBL environment, cool silver moonlight & glowing tracers
         const bCfg = BIOME_CONFIGS[biomeRef.current];
         _dayColor.setHex(bCfg.fogColor);
-        _nightColor.setHex(0x040712);
-        _blendColor.copy(_dayColor).lerp(_nightColor, nf * 0.85);
+        _nightColor.setHex(0x02040a);
+        _blendColor.copy(_dayColor).lerp(_nightColor, nf * 0.96);
         if (scene.background instanceof THREE.Color) {
           scene.background.copy(_blendColor);
         }
         if (scene.fog instanceof THREE.FogExp2) {
           scene.fog.color.copy(_blendColor);
-          scene.fog.density = bCfg.fogDensity * (1 + nf * 0.2);
+          scene.fog.density = bCfg.fogDensity * (1 + nf * 0.3);
         }
 
-        _dayColor.setHex(bCfg.keyColor);
-        _nightColor.setHex(0x93c5fd);
-        dirLight.color.copy(_dayColor).lerp(_nightColor, nf * 0.72);
-        dirLight.intensity = bCfg.keyIntensity * (1 - nf * 0.38);
+        // Dim RoomEnvironment IBL reflections during night raids so terrain & structures enter genuine night shadow
+        scene.environmentIntensity = 1.0 - nf * 0.78;
+        renderer.toneMappingExposure = 1.18 - nf * 0.22;
 
-        hemiLight.intensity = bCfg.hemiIntensity * (1 - nf * 0.45);
-        rimLight.intensity = bCfg.rimIntensity * (1 + nf * 0.08);
-        sharedAssets.bulletMat.color.setHex(nf > 0.45 ? 0xfff7c2 : 0xfef08a);
+        _dayColor.setHex(bCfg.keyColor);
+        _nightColor.setHex(0x7db4ff);
+        dirLight.color.copy(_dayColor).lerp(_nightColor, nf * 0.88);
+        dirLight.intensity = bCfg.keyIntensity * (1 - nf * 0.72);
+
+        _dayColor.setHex(bCfg.hemiSky);
+        _nightColor.setHex(0x162b4d);
+        hemiLight.color.copy(_dayColor).lerp(_nightColor, nf * 0.9);
+        _dayColor.setHex(bCfg.hemiGround);
+        _nightColor.setHex(0x040812);
+        hemiLight.groundColor.copy(_dayColor).lerp(_nightColor, nf * 0.92);
+        hemiLight.intensity = bCfg.hemiIntensity * (1 - nf * 0.74);
+
+        rimLight.intensity = bCfg.rimIntensity * (1 - nf * 0.35);
+        sharedAssets.bulletMat.color.setHex(nf > 0.35 ? 0xfffbeb : 0xfef08a);
 
         // Animate biome atmosphere, live weather, target-tracking AA searchlights & base glow
         worldHandleRef.current?.update(visualTimeSec, dtRaw, nf, _searchTargetsBuf);
@@ -2955,6 +3515,24 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
             if (hpRatio < 0.35 && Math.random() < 0.45) {
               spawnMuzzleFlash(sx, gy + 2.15, sz, 0.38, 1);
             }
+          }
+        }
+
+        // Update destructible secondary base facilities (2 Bunkers + Fuel Depot) & ruined smoke columns
+        for (let fi = 0; fi < activeFacilitiesRef.current.length; fi++) {
+          const fac = activeFacilitiesRef.current[fi];
+          fac.rig.updateAnim(visualTimeSec, camera.quaternion);
+          const fRatio = fac.status.hp / Math.max(1, fac.status.maxHp);
+          if ((!fac.status.alive || fRatio < 0.6) && visualTimeSec - fac.lastSmokeTime >= (fac.status.alive ? 0.62 : 0.42)) {
+            fac.lastSmokeTime = visualTimeSec;
+            const fgy = getGroundHeight(fac.status.x, fac.status.z, biomeRef.current);
+            spawnSmokePuff(
+              fac.status.x + (Math.random() - 0.5) * 1.1,
+              fgy + (fac.status.alive ? 1.85 : 0.95),
+              fac.status.z + (Math.random() - 0.5) * 1.1,
+              fac.status.alive ? 0.28 : 0.44,
+              0.88
+            );
           }
         }
 
@@ -3007,6 +3585,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               blips.push({ x: towerState.x, z: towerState.z, kind: 'tower' });
             }
           });
+          for (let fi = 0; fi < activeFacilitiesRef.current.length; fi++) {
+            const fac = activeFacilitiesRef.current[fi].status;
+            if (fac.alive) {
+              blips.push({ x: fac.x, z: fac.z, kind: 'facility' });
+            }
+          }
           activeEnemiesRef.current.forEach(({ enemyState }) => {
             if (!enemyState.alive) return;
             // Stealth aircraft only show crisply on tactical radar if inside a regional radar bubble or close to HQ
@@ -3086,6 +3670,183 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                 : stage.speedMultiplier;
             const activeSectors = upcomingSectorsRef.current.length > 0 ? upcomingSectorsRef.current : [0, 1, 2, 3];
 
+            const registerSpawnedEnemy = (
+              unitConfig: EnemyUnit,
+              sx: number,
+              startAlt: number,
+              sz: number,
+              angle: number,
+              spawnDist: number,
+              isEscort = false
+            ) => {
+              const scaledHp = Math.round(unitConfig.hp * hpScale * (isEscort ? 1.12 : 1.0));
+              const scaledUnit: EnemyUnit = { ...unitConfig, hp: scaledHp };
+              const instanceId = 'enemy_' + Math.random().toString(36).substring(2, 9);
+              const rig = buildEnemy3D(scaledUnit);
+              rig.group.rotation.order = 'YXZ';
+              rig.group.position.set(sx, startAlt, sz);
+              const initialHeading = Math.atan2(-sx, -sz);
+              rig.group.rotation.y = initialHeading;
+              scene.add(rig.group);
+
+              if (scaledUnit.isBoss && bossHornPlayedForWaveRef.current !== currentWaveIndexRef.current) {
+                bossHornPlayedForWaveRef.current = currentWaveIndexRef.current;
+                soundManager.setMusicMode('boss');
+                soundManager.playBossHorn();
+                addCameraShake(0.32);
+                pushTacticalAlert(`ورود ${scaledUnit.persianName ?? scaledUnit.name} همراه با ۴ جنگنده اسکورت!`);
+              }
+
+              const doctrine: FlightDoctrine =
+                unitConfig.doctrine ??
+                (unitConfig.shape === 'ballistic_missile'
+                  ? 'ballistic_missile'
+                  : unitConfig.shape === 'cruise_missile'
+                    ? 'cruise_missile'
+                    : 'swarm_kamikaze');
+              const isSmallAgile =
+                unitConfig.id === 'shahed_136' || unitConfig.id === 'switchblade_loiter';
+              const maneuverAmpLat =
+                doctrine === 'ballistic_missile'
+                  ? 0.2
+                  : doctrine === 'cruise_missile'
+                    ? 0.55
+                    : doctrine === 'recon_diver'
+                      ? 0.45
+                      : isSmallAgile
+                        ? 3.4 + Math.random() * 1.3
+                        : 1.45 + Math.random() * 0.55;
+              const maneuverAmpVert =
+                doctrine === 'ballistic_missile'
+                  ? 0.25
+                  : doctrine === 'cruise_missile'
+                    ? 0.45
+                    : isSmallAgile
+                      ? 1.55 + Math.random() * 0.7
+                      : 0.75 + Math.random() * 0.35;
+              const flankAmp =
+                doctrine === 'ballistic_missile'
+                  ? 1.6
+                  : doctrine === 'cruise_missile'
+                    ? 6.5 + Math.random() * 3.0
+                    : doctrine === 'recon_diver'
+                      ? 10.5 + Math.random() * 4.0
+                      : 6.0 + Math.random() * 4.5;
+              const maneuverFreq = isSmallAgile
+                ? 2.25 + Math.random() * 0.95
+                : doctrine === 'recon_diver'
+                  ? 1.05
+                  : 1.45 + Math.random() * 0.4;
+              const passSide = Math.random() > 0.5 ? 1 : -1;
+              const isBossUnit = Boolean(unitConfig.isBoss);
+              const turnRate =
+                doctrine === 'dogfight_interceptor'
+                  ? 2.45
+                  : doctrine === 'command_orbit'
+                    ? isBossUnit
+                      ? 0.52
+                      : 0.92
+                    : doctrine === 'fighter_bomber'
+                      ? isBossUnit
+                        ? 0.72
+                        : 1.05
+                      : 1.38;
+              const passOffset =
+                doctrine === 'dogfight_interceptor'
+                  ? 6.8 + Math.random() * 2.4
+                  : doctrine === 'fighter_bomber'
+                    ? (isBossUnit ? 7.8 : 6.8) + Math.random() * 2.4
+                    : 6.2 + Math.random() * 2.4;
+              const releaseRange =
+                doctrine === 'dogfight_interceptor'
+                  ? 22.5
+                  : doctrine === 'fighter_bomber'
+                    ? isBossUnit
+                      ? 20.5
+                      : 17.5
+                    : 18.5;
+              const turnaroundDist =
+                doctrine === 'dogfight_interceptor'
+                  ? 38 + Math.random() * 6
+                  : doctrine === 'fighter_bomber'
+                    ? (isBossUnit ? 35 : 32) + Math.random() * 5
+                    : 30 + Math.random() * 4;
+              const orbitRadius =
+                unitConfig.shape === 'sky_dreadnought'
+                  ? 22.5 + Math.random() * 3.0
+                  : 16.2 + Math.random() * 2.6;
+
+              const assignedGround = pickGroundTarget(isBossUnit || doctrine === 'dogfight_interceptor');
+
+              const activeEnemy: ActiveEnemy = {
+                instanceId,
+                unit: scaledUnit,
+                x: sx,
+                y: startAlt,
+                z: sz,
+                currentHp: scaledHp,
+                maxHp: scaledHp,
+                vx: 0,
+                vz: 0,
+                targetBaseX: assignedGround.x,
+                targetBaseZ: assignedGround.z,
+                rotationY: initialHeading,
+                speed: unitConfig.speed * 0.25 * speedScale,
+                alive: true,
+                empSlowUntil: 0,
+                radarIlluminated: false,
+                flaresRemaining: unitConfig.flaresCount ?? 0,
+                flareCooldownUntil: 0,
+              };
+
+              activeEnemiesRef.current.set(instanceId, {
+                enemyState: activeEnemy,
+                rig,
+                lastSmokeTime: simSec,
+                spawnDist,
+                baseAngle: angle,
+                travelProgress: 0,
+                cruiseAlt: startAlt,
+                maneuverPhase: Math.random() * Math.PI * 2,
+                maneuverFreq,
+                maneuverAmpLat,
+                maneuverAmpVert,
+                flankAmp,
+                curveDir: passSide,
+                prevX: sx,
+                prevY: startAlt,
+                prevZ: sz,
+                velX: Math.sin(initialHeading) * activeEnemy.speed,
+                velY: 0,
+                velZ: Math.cos(initialHeading) * activeEnemy.speed,
+                evadeStart: -10,
+                evadeUntil: -10,
+                evadeCooldownUntil: -10,
+                evadeDir: passSide,
+                evadeAmpLat: 0,
+                evadeAmpVert: 0,
+                evadeLatOffset: 0,
+                evadeVertOffset: 0,
+                bankAngle: 0,
+                doctrine,
+                flightPhase: 'approach',
+                heading: initialHeading,
+                turnRate,
+                passOffset,
+                passSide,
+                releaseRange,
+                turnaroundDist,
+                orbitRadius,
+                salvoRemaining: unitConfig.ordnanceCount ?? 0,
+                nextReleaseAt: simSec,
+                ordnanceCooldownAt: simSec + 1.5,
+                egressHeading: normalizeAngle(initialHeading),
+                lastDogfightGunTime: simSec,
+                targetKind: assignedGround.kind,
+                targetId: assignedGround.id,
+              });
+            };
+
             while (
               spawnedThisTick < 3 &&
               waveQueueRef.current.length > 0 &&
@@ -3105,157 +3866,32 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                     ? unitConfig.altitude + 2.5
                     : unitConfig.altitude + (Math.random() - 0.5) * 1.1;
 
-                const scaledHp = Math.round(unitConfig.hp * hpScale);
-                const scaledUnit: EnemyUnit = { ...unitConfig, hp: scaledHp };
-                const instanceId = 'enemy_' + Math.random().toString(36).substring(2, 9);
-                const rig = buildEnemy3D(scaledUnit);
-                rig.group.rotation.order = 'YXZ';
-                rig.group.position.set(sx, startAlt, sz);
-                const initialHeading = Math.atan2(-sx, -sz);
-                rig.group.rotation.y = initialHeading;
-                scene.add(rig.group);
+                registerSpawnedEnemy(unitConfig, sx, startAlt, sz, angle, spawnDist, false);
 
-                if (scaledUnit.isBoss && bossHornPlayedForWaveRef.current !== currentWaveIndexRef.current) {
-                  bossHornPlayedForWaveRef.current = currentWaveIndexRef.current;
-                  soundManager.setMusicMode('boss');
-                  soundManager.playBossHorn();
-                  addCameraShake(0.32);
+                // Realistic Boss Strike Package: spawn 4 strong escort fighters in a tight V-echelon formation!
+                if (unitConfig.escortUnitId && (unitConfig.escortCount ?? 0) > 0) {
+                  const escortCfg = ENEMY_UNITS.find((u) => u.id === unitConfig.escortUnitId);
+                  if (escortCfg) {
+                    const fwdX = -Math.cos(angle);
+                    const fwdZ = -Math.sin(angle);
+                    const rightX = -fwdZ;
+                    const rightZ = fwdX;
+                    const count = unitConfig.escortCount ?? 4;
+                    const vFormationOffsets: [number, number][] = [
+                      [-5.2, -4.4],
+                      [5.2, -4.4],
+                      [-9.8, -8.8],
+                      [9.8, -8.8],
+                    ];
+                    for (let eIdx = 0; eIdx < count; eIdx++) {
+                      const [latOff, backOff] = vFormationOffsets[eIdx % vFormationOffsets.length];
+                      const ex = sx + rightX * latOff + fwdX * backOff;
+                      const ez = sz + rightZ * latOff + fwdZ * backOff;
+                      const eAlt = Math.max(escortCfg.altitude, startAlt + 1.4) + (eIdx >= 2 ? 0.8 : 0);
+                      registerSpawnedEnemy(escortCfg, ex, eAlt, ez, angle, Math.hypot(ex, ez), true);
+                    }
+                  }
                 }
-
-                // 5-Class Flight Doctrine Calibration (maneuver scales cleanly by aircraft size & mission)
-                const doctrine: FlightDoctrine =
-                  unitConfig.doctrine ??
-                  (unitConfig.shape === 'ballistic_missile'
-                    ? 'ballistic_missile'
-                    : unitConfig.shape === 'cruise_missile'
-                      ? 'cruise_missile'
-                      : 'swarm_kamikaze');
-                const isSmallAgile =
-                  unitConfig.id === 'shahed_136' || unitConfig.id === 'switchblade_loiter';
-                const maneuverAmpLat =
-                  doctrine === 'ballistic_missile'
-                    ? 0.2
-                    : doctrine === 'cruise_missile'
-                      ? 0.55
-                      : doctrine === 'recon_diver'
-                        ? 0.45
-                        : isSmallAgile
-                          ? 3.4 + Math.random() * 1.3
-                          : 1.45 + Math.random() * 0.55;
-                const maneuverAmpVert =
-                  doctrine === 'ballistic_missile'
-                    ? 0.25
-                    : doctrine === 'cruise_missile'
-                      ? 0.45
-                      : isSmallAgile
-                        ? 1.55 + Math.random() * 0.7
-                        : 0.75 + Math.random() * 0.35;
-                const flankAmp =
-                  doctrine === 'ballistic_missile'
-                    ? 1.6
-                    : doctrine === 'cruise_missile'
-                      ? 6.5 + Math.random() * 3.0
-                      : doctrine === 'recon_diver'
-                        ? 10.5 + Math.random() * 4.0
-                        : 6.0 + Math.random() * 4.5;
-                const maneuverFreq = isSmallAgile
-                  ? 2.25 + Math.random() * 0.95
-                  : doctrine === 'recon_diver'
-                    ? 1.05
-                    : 1.45 + Math.random() * 0.4;
-                const passSide = Math.random() > 0.5 ? 1 : -1;
-                const isBossUnit = Boolean(unitConfig.isBoss);
-                const turnRate =
-                  doctrine === 'dogfight_interceptor'
-                    ? 2.45
-                    : doctrine === 'command_orbit'
-                      ? isBossUnit
-                        ? 0.52
-                        : 0.92
-                      : doctrine === 'fighter_bomber'
-                        ? isBossUnit
-                          ? 0.72
-                          : 1.05
-                        : 1.38;
-                const passOffset =
-                  doctrine === 'dogfight_interceptor'
-                    ? 7.4 + Math.random() * 2.2
-                    : doctrine === 'fighter_bomber'
-                      ? (isBossUnit ? 8.5 : 7.0) + Math.random() * 2.5
-                      : 6.2 + Math.random() * 2.4;
-                const releaseRange =
-                  doctrine === 'dogfight_interceptor'
-                    ? 21.5
-                    : doctrine === 'fighter_bomber'
-                      ? isBossUnit
-                        ? 17.5
-                        : 16.0
-                      : 18.5;
-                const turnaroundDist =
-                  doctrine === 'dogfight_interceptor'
-                    ? 36 + Math.random() * 6
-                    : doctrine === 'fighter_bomber'
-                      ? (isBossUnit ? 33 : 31) + Math.random() * 5
-                      : 30 + Math.random() * 4;
-                const orbitRadius =
-                  unitConfig.shape === 'sky_dreadnought'
-                    ? 21.5 + Math.random() * 3.0
-                    : 15.8 + Math.random() * 2.6;
-
-                const activeEnemy: ActiveEnemy = {
-                  instanceId,
-                  unit: scaledUnit,
-                  x: sx,
-                  y: startAlt,
-                  z: sz,
-                  currentHp: scaledHp,
-                  maxHp: scaledHp,
-                  vx: 0,
-                  vz: 0,
-                  targetBaseX: (Math.random() - 0.5) * 1.4,
-                  targetBaseZ: (Math.random() - 0.5) * 1.4,
-                  rotationY: initialHeading,
-                  speed: unitConfig.speed * 0.25 * speedScale,
-                  alive: true,
-                  empSlowUntil: 0,
-                  radarIlluminated: false,
-                  flaresRemaining: unitConfig.flaresCount ?? 0,
-                  flareCooldownUntil: 0,
-                };
-
-                activeEnemiesRef.current.set(instanceId, {
-                  enemyState: activeEnemy,
-                  rig,
-                  lastSmokeTime: simSec,
-                  spawnDist,
-                  baseAngle: angle,
-                  travelProgress: 0,
-                  cruiseAlt: startAlt,
-                  maneuverPhase: Math.random() * Math.PI * 2,
-                  maneuverFreq,
-                  maneuverAmpLat,
-                  maneuverAmpVert,
-                  flankAmp,
-                  curveDir: passSide,
-                  prevX: sx,
-                  prevY: startAlt,
-                  prevZ: sz,
-                  bankAngle: 0,
-                  doctrine,
-                  flightPhase: 'approach',
-                  heading: initialHeading,
-                  turnRate,
-                  passOffset,
-                  passSide,
-                  releaseRange,
-                  turnaroundDist,
-                  orbitRadius,
-                  salvoRemaining: unitConfig.ordnanceCount ?? 0,
-                  nextReleaseAt: simSec,
-                  ordnanceCooldownAt: simSec + 1.5,
-                  egressHeading: normalizeAngle(initialHeading),
-                  lastDogfightGunTime: simSec,
-                });
               }
             }
           }
@@ -3291,7 +3927,11 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               setCurrentWaveIndex((prev) => prev + 1);
             } else if (waveIdx + 1 >= stage.waves.length) {
               const finalHpRatio = baseHpRef.current / Math.max(1, maxBaseHpRef.current);
-              const stars = finalHpRatio >= 0.90 ? 3 : finalHpRatio >= 0.60 ? 2 : 1;
+              let stars = finalHpRatio >= 0.90 ? 3 : finalHpRatio >= 0.60 ? 2 : 1;
+              if (activeFacilitiesRef.current.length > 0) {
+                const lostFacilities = activeFacilitiesRef.current.filter((f) => !f.status.alive).length;
+                stars = Math.max(1, Math.min(stars, 3 - lostFacilities));
+              }
               setEarnedStars(stars);
               setWaveState('victory');
               soundManager.playVictoryFanfare();
@@ -3468,29 +4108,31 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                     }
                     const fwdX = Math.sin(entry.heading);
                     const fwdZ = Math.cos(entry.heading);
-                    const toHqX = -enemyState.x / Math.max(0.1, distToHq);
-                    const toHqZ = -enemyState.z / Math.max(0.1, distToHq);
-                    const ordSpd = enemyState.unit.isBoss ? 10.5 : 9.2;
+                    const tgt = pickGroundTarget(true);
+                    const toTgtLen = Math.max(0.1, Math.hypot(tgt.x - enemyState.x, tgt.z - enemyState.z));
+                    const toTgtX = (tgt.x - enemyState.x) / toTgtLen;
+                    const toTgtZ = (tgt.z - enemyState.z) / toTgtLen;
+                    const ordSpd = enemyState.unit.isBoss ? 10.6 : 9.4;
                     spawnEnemyOrdnance(
                       enemyState.x + (Math.random() - 0.5) * 1.2,
                       enemyState.y - 0.65,
                       enemyState.z + (Math.random() - 0.5) * 1.2,
-                      (fwdX * 0.45 + toHqX * 0.55) * ordSpd,
+                      (fwdX * 0.45 + toTgtX * 0.55) * ordSpd,
                       -1.8,
-                      (fwdZ * 0.45 + toHqZ * 0.55) * ordSpd,
+                      (fwdZ * 0.45 + toTgtZ * 0.55) * ordSpd,
                       enemyState.unit.ordnanceDamage ?? 42,
                       enemyState.unit.ordnanceHp ?? 36,
                       ordSpd,
                       false,
-                      simSec
+                      simSec,
+                      tgt
                     );
                     spawnMuzzleFlash(enemyState.x, enemyState.y - 0.65, enemyState.z, 0.55, 1);
                   }
                 }
               } else {
-                // FIGHTER-BOMBER & STRIKE FIGHTER 3-PHASE BOMBING RUN: Approach -> Egress -> Wide Turnaround
+                // FIGHTER-BOMBER, HIGH-ALTITUDE JET & STRIKE FIGHTER 3-PHASE BOMBING RUN: Approach -> Egress -> Wide Turnaround
                 if (entry.flightPhase === 'approach') {
-                  // Offset attack aim point beside HQ so aircraft sweeps cleanly across base and bombs it
                   const toHqLen = Math.max(1, distToHq);
                   const ux = -enemyState.x / toHqLen;
                   const uz = -enemyState.z / toHqLen;
@@ -3499,32 +4141,40 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                   const aimX = px * entry.passOffset;
                   const aimZ = pz * entry.passOffset;
                   desiredHeading = Math.atan2(aimX - enemyState.x, aimZ - enemyState.z);
-                  targetAlt =
-                    entry.cruiseAlt -
-                    Math.max(0, Math.min(1, (30 - distToHq) / 18)) * (enemyState.unit.isBoss ? 1.2 : 1.7);
+                  // High-altitude enemy fighters & B-2 bombers hold high altitude during bombing passes!
+                  const diveDrop =
+                    entry.doctrine === 'dogfight_interceptor' || enemyState.unit.shape === 'b2_spirit'
+                      ? 0.65
+                      : enemyState.unit.isBoss
+                        ? 1.1
+                        : 1.7;
+                  targetAlt = entry.cruiseAlt - Math.max(0, Math.min(1, (30 - distToHq) / 18)) * diveDrop;
 
-                  // Release visible 3D bombs/air-to-surface missiles on entering strike envelope!
+                  // Release visible 3D gravity bombs / precision munitions targeting Towers, Bunkers, Fuel Depot & HQ!
                   if (distToHq <= entry.releaseRange && entry.salvoRemaining > 0 && simSec >= entry.nextReleaseAt) {
                     entry.salvoRemaining -= 1;
-                    entry.nextReleaseAt = simSec + (enemyState.unit.isBoss ? 0.4 : 0.32);
+                    entry.nextReleaseAt = simSec + (enemyState.unit.isBoss ? 0.38 : 0.34);
                     const fwdX = Math.sin(entry.heading);
                     const fwdZ = Math.cos(entry.heading);
                     const curSpd = enemyState.speed * slowFactor;
-                    const isBomb = entry.doctrine === 'fighter_bomber';
-                    const ordSpd = isBomb ? 9.8 : 12.2;
+                    const isBomb =
+                      entry.doctrine === 'fighter_bomber' || entry.doctrine === 'dogfight_interceptor';
+                    const ordSpd = isBomb ? 9.6 : 12.0;
                     const sideOff = (entry.salvoRemaining % 2 === 0 ? 1 : -1) * (enemyState.unit.isBoss ? 1.3 : 0.65);
+                    const bombTarget = pickGroundTarget(true);
                     spawnEnemyOrdnance(
                       enemyState.x - fwdZ * sideOff,
-                      enemyState.y - 0.55,
+                      enemyState.y - 0.65,
                       enemyState.z + fwdX * sideOff,
-                      fwdX * Math.max(curSpd * 1.15, 5.2),
-                      -2.2,
-                      fwdZ * Math.max(curSpd * 1.15, 5.2),
-                      enemyState.unit.ordnanceDamage ?? 36,
-                      enemyState.unit.ordnanceHp ?? 28,
+                      fwdX * Math.max(curSpd * 0.95, 4.8),
+                      isBomb ? -1.4 : -2.2,
+                      fwdZ * Math.max(curSpd * 0.95, 4.8),
+                      enemyState.unit.ordnanceDamage ?? 42,
+                      enemyState.unit.ordnanceHp ?? 26,
                       ordSpd,
                       isBomb,
-                      simSec
+                      simSec,
+                      bombTarget
                     );
                     spawnMuzzleFlash(enemyState.x, enemyState.y - 0.55, enemyState.z, 0.45, 1);
                   }
@@ -3571,6 +4221,10 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               const vx = enemyState.x - prevX;
               const vy = enemyState.y - prevY;
               const vz = enemyState.z - prevZ;
+              const invDt = dt > 0.0001 ? 1 / dt : 0;
+              entry.velX = vx * invDt;
+              entry.velY = vy * invDt;
+              entry.velZ = vz * invDt;
               const horizStep = Math.hypot(vx, vz);
 
               rig.group.position.set(enemyState.x, enemyState.y, enemyState.z);
@@ -3591,12 +4245,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               rig.group.rotation.order = 'YXZ';
               rig.group.rotation.set(clampedPitch, entry.heading, entry.bankAngle);
 
-              // Crisp jet contrails for Crimson Raptor, Karrar Strike & Heavy Bomber
+              // Crisp jet contrails for High-Altitude Fighters, Karrar Strike & B-2 / Heavy Bombers
               if (
                 (enemyState.unit.shape === 'enemy_fighter' ||
                   enemyState.unit.id === 'karrar_strike' ||
+                  enemyState.unit.shape === 'b2_spirit' ||
                   enemyState.unit.shape === 'heavy_bomber') &&
-                simSec - entry.lastSmokeTime > (enemyState.unit.shape === 'enemy_fighter' ? 0.095 : 0.14)
+                simSec - entry.lastSmokeTime > (enemyState.unit.shape === 'enemy_fighter' ? 0.085 : 0.14)
               ) {
                 entry.lastSmokeTime = simSec;
                 spawnSmokePuff(
@@ -3610,7 +4265,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               return;
             }
 
-            // KAMIKAZE / DIRECT-STRIKE DOCTRINES: Swarm Micro-Drones, Recon Diver, Cruise & Ballistic Missiles
+            // KAMIKAZE / DIRECT-STRIKE DOCTRINES: Straight Aggressive Approach + Short Reactive Evasion ONLY Under Fire!
             entry.travelProgress = Math.min(
               1.02,
               entry.travelProgress + (enemyState.speed * slowFactor * dt) / Math.max(12, entry.spawnDist)
@@ -3624,22 +4279,29 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
             const centerX = enemyState.targetBaseX + radX * ((1 - p) * entry.spawnDist);
             const centerZ = enemyState.targetBaseZ + radZ * ((1 - p) * entry.spawnDist);
-            const flankOffset = entry.curveDir * entry.flankAmp * Math.sin(p * Math.PI) * (1 - p * 0.35);
-            const weaveFade = Math.min(1, p * 4.5) * Math.max(0, 1 - Math.pow(p, 2.2));
-            const weaveSin = Math.sin(simSec * entry.maneuverFreq + entry.maneuverPhase);
-            const weaveCos = Math.cos(simSec * entry.maneuverFreq + entry.maneuverPhase);
-            const weaveOffset = weaveSin * entry.maneuverAmpLat * weaveFade;
-            const totalLat = flankOffset + weaveOffset;
+
+            // ZERO pre-fire dancing! Drones fly straight until shot at, then snap into a brief sharp jink!
+            const prevEvadeLat = entry.evadeLatOffset;
+            let desiredEvadeLat = 0;
+            let desiredEvadeVert = 0;
+            if (simSec < entry.evadeUntil && p < 0.9) {
+              const u = Math.max(0, Math.min(1, (simSec - entry.evadeStart) / Math.max(0.05, entry.evadeUntil - entry.evadeStart)));
+              const env = Math.sin(u * Math.PI);
+              desiredEvadeLat = entry.evadeDir * entry.evadeAmpLat * env;
+              desiredEvadeVert = (entry.evadeDir > 0 ? 1 : -0.65) * entry.evadeAmpVert * env;
+            }
+            entry.evadeLatOffset = THREE.MathUtils.damp(entry.evadeLatOffset, desiredEvadeLat, 9.5, dt);
+            entry.evadeVertOffset = THREE.MathUtils.damp(entry.evadeVertOffset, desiredEvadeVert, 8.5, dt);
+
+            // Tiny subtle curve ONLY for terrain-hugging cruise missiles; 0 for direct-strike drones & ballistics
+            const missileArcLat =
+              entry.doctrine === 'cruise_missile' ? entry.curveDir * 1.9 * Math.sin(p * Math.PI) : 0;
+            const totalLat = missileArcLat + entry.evadeLatOffset;
 
             enemyState.x = centerX + perpX * totalLat;
             enemyState.z = centerZ + perpZ * totalLat;
 
             const targetImpactY = 1.55;
-            const vertBob =
-              Math.sin(simSec * (entry.maneuverFreq * 1.25) + entry.maneuverPhase * 1.6) *
-              entry.maneuverAmpVert *
-              (1 - p * 0.8);
-
             let desiredY: number;
             if (entry.doctrine === 'ballistic_missile') {
               const arc = Math.sin(p * Math.PI) * 16.0;
@@ -3649,13 +4311,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               const popUp = Math.exp(-Math.pow((p - 0.72) / 0.12, 2)) * 3.8;
               const diveT = Math.max(0, Math.min(1, (p - 0.75) / 0.25));
               const smoothDive = diveT * diveT * (3 - 2 * diveT);
-              const cruiseY = Math.max(3.3, entry.cruiseAlt - 0.5) + vertBob * 0.5 + popUp;
+              const cruiseY = Math.max(3.3, entry.cruiseAlt - 0.5) + popUp;
               desiredY = cruiseY * (1 - smoothDive) + targetImpactY * smoothDive;
             } else {
-              const diveStart = entry.doctrine === 'recon_diver' ? 0.72 : 0.66;
+              const diveStart = entry.doctrine === 'recon_diver' ? 0.74 : 0.7;
               const diveT = Math.max(0, Math.min(1, (p - diveStart) / (1 - diveStart)));
               const smoothDive = diveT * diveT * (3 - 2 * diveT);
-              const cruiseY = entry.cruiseAlt + vertBob;
+              const cruiseY = entry.cruiseAlt + entry.evadeVertOffset * (1 - smoothDive);
               desiredY = cruiseY * (1 - smoothDive) + targetImpactY * smoothDive;
             }
 
@@ -3665,6 +4327,10 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
             const vx = enemyState.x - prevX;
             const vy = enemyState.y - prevY;
             const vz = enemyState.z - prevZ;
+            const invDt = dt > 0.0001 ? 1 / dt : 0;
+            entry.velX = vx * invDt;
+            entry.velY = vy * invDt;
+            entry.velZ = vz * invDt;
             const horizStep = Math.hypot(vx, vz);
 
             rig.group.position.set(enemyState.x, enemyState.y, enemyState.z);
@@ -3673,13 +4339,10 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               const rawPitch = -Math.atan2(vy, horizStep);
               const clampedPitch = THREE.MathUtils.clamp(rawPitch, -0.95, 1.05);
               const isMissile = entry.doctrine === 'cruise_missile' || entry.doctrine === 'ballistic_missile';
-              const maxBank = isMissile ? 0.14 : 0.46;
-              const targetBank = THREE.MathUtils.clamp(
-                (weaveCos * (isMissile ? 0.08 : 0.34) * weaveFade + entry.curveDir * 0.15 * (1 - p)),
-                -maxBank,
-                maxBank
-              );
-              entry.bankAngle = THREE.MathUtils.damp(entry.bankAngle, targetBank, 6.5, dt);
+              const latVel = (entry.evadeLatOffset - prevEvadeLat) * invDt;
+              const maxBank = isMissile ? 0.12 : 0.64;
+              const targetBank = isMissile ? 0 : THREE.MathUtils.clamp(-latVel * 0.085, -maxBank, maxBank);
+              entry.bankAngle = THREE.MathUtils.damp(entry.bankAngle, targetBank, 8.0, dt);
               rig.group.rotation.order = 'YXZ';
               rig.group.rotation.set(clampedPitch, yaw, entry.bankAngle);
             }
@@ -3699,18 +4362,36 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               );
             }
 
-            const distToBase = Math.hypot(enemyState.targetBaseX - enemyState.x, enemyState.targetBaseZ - enemyState.z);
-            if (distToBase < 2.25 || entry.travelProgress >= 0.995) {
+            // Dynamically resolve ground target (if assigned tower/facility was destroyed mid-flight, retarget HQ!)
+            const liveTarget = resolveGroundTargetPos(
+              entry.targetKind,
+              entry.targetId,
+              enemyState.targetBaseX,
+              enemyState.targetBaseZ
+            );
+            entry.targetKind = liveTarget.kind;
+            entry.targetId = liveTarget.id;
+            enemyState.targetBaseX = liveTarget.x;
+            enemyState.targetBaseZ = liveTarget.z;
+
+            const distToTarget = Math.hypot(liveTarget.x - enemyState.x, liveTarget.z - enemyState.z);
+            if (distToTarget < 2.25 || entry.travelProgress >= 0.995) {
               enemyState.alive = false;
               enemiesToRemove.push(enemyId);
-              applyBaseDamage(
-                enemyState.unit.damageToBase,
-                enemyState.x,
-                enemyState.y,
-                enemyState.z,
-                enemyState.unit.isBoss ? 2.2 : 1.35,
-                enemyState.unit.isBoss ? 0.72 : 0.45
-              );
+              if (liveTarget.kind === 'tower') {
+                applyTowerDamage(liveTarget.id, enemyState.unit.damageToBase, enemyState.x, enemyState.y, enemyState.z);
+              } else if (liveTarget.kind === 'facility') {
+                applyFacilityDamage(liveTarget.id, enemyState.unit.damageToBase, enemyState.x, enemyState.y, enemyState.z);
+              } else {
+                applyBaseDamage(
+                  enemyState.unit.damageToBase,
+                  enemyState.x,
+                  enemyState.y,
+                  enemyState.z,
+                  enemyState.unit.isBoss ? 2.2 : 1.35,
+                  enemyState.unit.isBoss ? 0.72 : 0.45
+                );
+              }
               return;
             }
           });
@@ -3727,9 +4408,24 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
           const overdriveMultiplier = simSec < overdriveUntilRef.current ? 1.35 : 1.0;
 
-          // 4. TOWER COMBAT (REGIONAL RADAR LINK + POINT-DEFENSE ORDNANCE INTERCEPTION)
+          // 4. TOWER COMBAT (REGIONAL RADAR LINK + ALTITUDE CEILINGS + S-400 STRATEGIC LOCK + POINT DEFENSE)
           activeTowersRef.current.forEach((towerEntry) => {
-            const { towerState, rig } = towerEntry;
+            const { towerState, rig, healthBar } = towerEntry;
+
+            // Keep damaged tower 3D HP bar facing camera & emit dark smoke when below 55% integrity
+            if (healthBar.mesh.visible) {
+              healthBar.mesh.quaternion.copy(camera.quaternion);
+            }
+            if (towerState.hp < towerState.maxHp * 0.55 && visualTimeSec - towerEntry.lastSmokeTime >= 0.48) {
+              towerEntry.lastSmokeTime = visualTimeSec;
+              spawnSmokePuff(
+                towerState.x + (Math.random() - 0.5) * 0.55,
+                towerState.y + 1.55,
+                towerState.z + (Math.random() - 0.5) * 0.55,
+                0.24,
+                0.65
+              );
+            }
 
             if (towerState.tower.shape === 'radar_dish') {
               rig.turretHead.rotation.y += dt * (1.7 + towerState.level * 0.35);
@@ -3759,14 +4455,43 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
             const localJamPenalty = stage.modifier === 'radar_jam' && !inRadarBubble ? 0.85 : 1.0;
             const baseRange = towerState.range * 0.12 * (inRadarBubble ? 1.35 : 1.0) * localJamPenalty;
+
+            // Realistic engagement altitude ceiling: CIWS defends low airspace & falling bombs, SAMs dominate high-altitude jets!
+            const maxEngageAlt =
+              towerState.tower.id === 'ciws_light'
+                ? inRadarBubble
+                  ? 13.0
+                  : 11.2
+                : towerState.tower.id === 'avenger_stinger'
+                  ? inRadarBubble
+                    ? 16.5
+                    : 14.2
+                  : towerState.tower.id === 'pantsir_point' || towerState.tower.id === 'iron_dome_pod'
+                    ? inRadarBubble
+                      ? 19.6
+                      : 17.2
+                    : 36.0;
+
+            const strategicOnly = Boolean(towerState.tower.strategicTargetOnly);
+
             let bestTarget: ActiveEnemy | null = null;
             let bestOrdnanceIdx = -1;
             let bestScore = -Infinity;
             const prio = towerState.targetingPriority ?? 'closest';
 
-            // A) Scan airborne enemies (stealth revealed locally inside radar bubbles; illuminated targets get +12% early lock!)
+            // A) Scan airborne enemies (with S-400 strategic-target filter & realistic altitude ceilings!)
             activeEnemiesRef.current.forEach(({ enemyState }) => {
               if (!enemyState.alive) return;
+              if (enemyState.y > maxEngageAlt) return;
+              if (strategicOnly) {
+                const isHeavyOrHigh = Boolean(
+                  enemyState.unit.isHeavyStrategic ||
+                    enemyState.unit.isBoss ||
+                    enemyState.unit.altitude >= 11.5
+                );
+                if (!isHeavyOrHigh) return;
+              }
+
               const stealthHidden = Boolean(enemyState.unit.isStealth && !enemyState.radarIlluminated);
               const earlyLockBonus = inRadarBubble && enemyState.radarIlluminated ? 1.12 : 1.0;
               const detectRange = stealthHidden ? baseRange * 0.42 : baseRange * earlyLockBonus;
@@ -3779,8 +4504,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                 score = enemyState.currentHp;
               } else if (prio === 'fastest') {
                 score = enemyState.speed * 100 - distToHq * 0.1;
-              } else if (prio === 'boss_first') {
-                score = (enemyState.unit.isBoss ? 100000 : 0) - distToHq;
+              } else if (prio === 'boss_first' || strategicOnly) {
+                score = (enemyState.unit.isBoss ? 100000 : enemyState.unit.shape === 'ballistic_missile' ? 40000 : 0) - distToHq;
               } else {
                 score = -distToHq;
               }
@@ -3792,23 +4517,24 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               }
             });
 
-            // B) Point-Defense Interception of incoming Bomber Bombs & Standoff Missiles!
+            // B) Point-Defense Interception of falling Bombs & Standoff Missiles (S-400 never wastes shots on bombs!)
             const canInterceptOrdnance =
-              towerState.tower.id === 'ciws_light' ||
-              towerState.tower.id === 'laser_beam_c' ||
-              towerState.tower.id === 'pantsir_point' ||
-              towerState.tower.id === 'avenger_stinger' ||
-              towerState.tower.id === 'iron_dome_pod';
+              !strategicOnly &&
+              (towerState.tower.id === 'ciws_light' ||
+                towerState.tower.id === 'pantsir_point' ||
+                towerState.tower.id === 'avenger_stinger' ||
+                towerState.tower.id === 'iron_dome_pod');
             if (canInterceptOrdnance) {
               const isIronDome = towerState.tower.id === 'iron_dome_pod';
               for (let oi = 0; oi < pools.ordnances.length; oi++) {
                 const ord = pools.ordnances[oi];
                 if (!ord.active) continue;
+                if (ord.y > maxEngageAlt + 2.5) continue;
                 const dTower = Math.hypot(ord.x - towerState.x, ord.z - towerState.z);
                 if (dTower > baseRange) continue;
-                const dHq = Math.hypot(ord.x, ord.z);
-                // Urgent interception priority when bombs/missiles close in on the bunker!
-                const ordScore = (dHq < (isIronDome ? 24 : 17) ? (isIronDome ? 6200 : 4500) : isIronDome ? 260 : 80) - dHq;
+                const dTgt = Math.hypot(ord.x - ord.targetX, ord.z - ord.targetZ);
+                // Urgent interception priority when bombs close in on towers, bunkers, or HQ!
+                const ordScore = (dTgt < (isIronDome ? 24 : 18) ? (isIronDome ? 6400 : 4800) : isIronDome ? 280 : 95) - dTgt;
                 if (ordScore > bestScore) {
                   bestScore = ordScore;
                   bestTarget = null;
@@ -3823,19 +4549,49 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
             if (hasTarget) {
               const ordTarget = bestOrdnanceIdx >= 0 ? pools.ordnances[bestOrdnanceIdx] : null;
               const enemyTarget = bestTarget as ActiveEnemy | null;
+              const enemyEntryTarget = enemyTarget ? activeEnemiesRef.current.get(enemyTarget.instanceId) : undefined;
               const tx = ordTarget ? ordTarget.x : enemyTarget!.x;
               const ty = ordTarget ? ordTarget.y : enemyTarget!.y;
               const tz = ordTarget ? ordTarget.z : enemyTarget!.z;
+              const tvx = ordTarget ? ordTarget.vx : enemyEntryTarget ? enemyEntryTarget.velX : 0;
+              const tvy = ordTarget ? ordTarget.vy : enemyEntryTarget ? enemyEntryTarget.velY : 0;
+              const tvz = ordTarget ? ordTarget.vz : enemyEntryTarget ? enemyEntryTarget.velZ : 0;
 
               towerState.targetEnemyId = enemyTarget ? enemyTarget.instanceId : ordTarget ? ordTarget.id : null;
-              _targetPos.set(tx, ty, tz);
-              rig.turretHead.lookAt(_targetPos);
+              const isGunTurret =
+                towerState.tower.id === 'ciws_light' || towerState.tower.id === 'pantsir_point';
+              if (isGunTurret) {
+                const aimLead = computeBallisticLead(
+                  towerState.x,
+                  towerState.y + 1.5,
+                  towerState.z,
+                  tx,
+                  ty,
+                  tz,
+                  tvx,
+                  tvy,
+                  tvz,
+                  towerState.tower.id === 'pantsir_point' ? 64 : 60,
+                  0
+                );
+                _targetPos.set(aimLead.x, aimLead.y, aimLead.z);
+                rig.turretHead.lookAt(_targetPos);
+              } else {
+                _targetPos.set(tx, ty, tz);
+                if (towerState.tower.shape === 's400_launcher') {
+                  // Vertical TEL stays level on stabilizers and rotates azimuth cleanly
+                  rig.turretHead.rotation.set(0, Math.atan2(tx - towerState.x, tz - towerState.z), 0);
+                } else {
+                  rig.turretHead.lookAt(_targetPos);
+                }
+              }
 
               const effectiveFireRate = towerState.fireRate * overdriveMultiplier * (jammed ? 0.7 : 1.0);
               const fireInterval = 1.0 / Math.max(0.1, effectiveFireRate);
 
               if (simSec - towerState.lastFireTime >= fireInterval) {
                 towerState.lastFireTime = simSec;
+                towerEntry.shotCounter++;
                 rig.triggerRecoil();
 
                 // Pick alternating visible muzzle anchor cleanly (zero array allocation!)
@@ -3859,67 +4615,34 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                   _spawnPos.set(towerState.x, towerState.y + 1.5, towerState.z);
                 }
 
-                if (towerState.tower.id === 'railgun_turret') {
-                  // Hypersonic Electromagnetic Railgun: instant armor-piercing kinetic beam (100% immune to thermal flares!)
-                  soundManager.playRailgun();
-                  spawnPooledLaser(_spawnPos, _targetPos, towerState.level + 2, simSec + 0.14);
-                  spawnMuzzleFlash(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0.85, 0);
-                  spawnLaserSparks(_targetPos.x, _targetPos.y, _targetPos.z);
-                  spawnShockwaveRing(_targetPos.x, _targetPos.y, _targetPos.z, 0x38bdf8, 0.35, 2.8, 0.25);
-                  triggerFlashLight(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0x38bdf8, 18, 0.14);
-
-                  if (ordTarget) {
-                    ordTarget.hp -= towerState.damage;
-                    if (ordTarget.hp <= 0) {
-                      ordTarget.active = false;
-                      ordTarget.mesh.visible = false;
-                      triggerExplosion(ordTarget.x, ordTarget.y, ordTarget.z, 0.95);
-                      towerState.killCount++;
-                    }
-                  } else if (enemyTarget) {
-                    enemyTarget.currentHp -= towerState.damage;
-                    const enemyEntry = activeEnemiesRef.current.get(enemyTarget.instanceId);
-                    if (enemyEntry) {
-                      enemyEntry.rig.healthBar.updateHp(enemyTarget.currentHp);
-                      if (enemyTarget.currentHp <= 0) {
-                        destroyEnemyEntry(
-                          enemyTarget.instanceId,
-                          enemyTarget.unit.isBoss ? 2.25 : 1.35
-                        );
-                        towerState.killCount++;
-                      }
-                    }
-                  }
-                } else if (towerState.tower.id === 'laser_beam_c') {
-                  soundManager.playLaser();
-                  spawnPooledLaser(_spawnPos, _targetPos, towerState.level, simSec + 0.1);
-                  spawnLaserSparks(_targetPos.x, _targetPos.y, _targetPos.z);
-                  triggerFlashLight(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0x22d3ee, 8, 0.09);
-
-                  if (ordTarget) {
-                    ordTarget.hp -= towerState.damage;
-                    if (ordTarget.hp <= 0) {
-                      ordTarget.active = false;
-                      ordTarget.mesh.visible = false;
-                      triggerExplosion(ordTarget.x, ordTarget.y, ordTarget.z, 0.85);
-                      towerState.killCount++;
-                    }
-                  } else if (enemyTarget) {
-                    enemyTarget.currentHp -= towerState.damage;
-                    const enemyEntry = activeEnemiesRef.current.get(enemyTarget.instanceId);
-                    if (enemyEntry) {
-                      enemyEntry.rig.healthBar.updateHp(enemyTarget.currentHp);
-                      if (enemyTarget.currentHp <= 0) {
-                        destroyEnemyEntry(
-                          enemyTarget.instanceId,
-                          enemyTarget.unit.isBoss ? 2.2 : 1.05
-                        );
-                        towerState.killCount++;
-                      }
-                    }
-                  }
+                if (towerState.tower.id === 's400_thaad') {
+                  // S-400 / THAAD Strategic Vertical Cold-Launch Interceptor: active radar-guided (100% immune to IR flares!)
+                  soundManager.playHeavySamLaunch();
+                  spawnMuzzleFlash(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0.95, 1);
+                  spawnSmokePuff(_spawnPos.x, _spawnPos.y - 0.25, _spawnPos.z, 0.42, 0.75);
+                  spawnSmokePuff(towerState.x, towerState.y + 0.65, towerState.z, 0.48, 0.85);
+                  triggerFlashLight(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0xffaa44, 18, 0.16);
+                  spawnPooledProjectile(
+                    'missile',
+                    _spawnPos.x,
+                    _spawnPos.y,
+                    _spawnPos.z,
+                    tx,
+                    ty,
+                    tz,
+                    enemyTarget ? enemyTarget.instanceId : '',
+                    50,
+                    towerState.damage,
+                    4.6,
+                    simSec,
+                    true,
+                    bestOrdnanceIdx,
+                    true,
+                    true,
+                    'radar_sam'
+                  );
                 } else if (towerState.tower.id === 'iron_dome_pod') {
-                  // Multi-Tube Point Defense Pod: 3-micro-missile rapid interceptor salvo!
+                  // Multi-Tube Point Defense Pod: 3-rocket rapid interceptor salvo (single-lock + airburst, NO supernatural target teleport!)
                   soundManager.playMissileLaunch(false);
                   spawnMuzzleFlash(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0.56, 1);
                   spawnSmokePuff(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0.25, 0.48);
@@ -3969,16 +4692,33 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                       tgt.y,
                       tgt.z,
                       tgt.enemyId,
-                      35,
+                      34,
                       towerState.damage,
                       3.2,
                       simSec,
                       false,
-                      tgt.ordIdx
+                      tgt.ordIdx,
+                      false,
+                      false,
+                      'short_rocket'
                     );
                   }
                   towerEntry.muzzleCursor = (towerEntry.muzzleCursor + 2) % Math.max(1, anchors.length);
                 } else if (towerState.tower.id === 'ciws_light') {
+                  // CIWS Phalanx 20mm: Pure Ballistic Lead-Predicted Autocannon (NO homing!)
+                  const lead = computeBallisticLead(
+                    _spawnPos.x,
+                    _spawnPos.y,
+                    _spawnPos.z,
+                    tx,
+                    ty,
+                    tz,
+                    tvx,
+                    tvy,
+                    tvz,
+                    60,
+                    0.42
+                  );
                   soundManager.playGatling();
                   spawnMuzzleFlash(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0.4, 0);
                   triggerFlashLight(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0xffd166, 6, 0.05);
@@ -3987,17 +4727,83 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                     _spawnPos.x,
                     _spawnPos.y,
                     _spawnPos.z,
-                    tx,
-                    ty,
-                    tz,
+                    lead.x,
+                    lead.y,
+                    lead.z,
                     enemyTarget ? enemyTarget.instanceId : '',
-                    48,
+                    60,
                     towerState.damage,
-                    1.15,
+                    1.05,
                     simSec,
                     false,
-                    bestOrdnanceIdx
+                    bestOrdnanceIdx,
+                    false,
+                    false,
+                    'ballistic'
                   );
+                } else if (towerState.tower.id === 'pantsir_point') {
+                  // Pantsir-S1 Hybrid: 3x Ballistic Lead-Predicted 30mm Autocannon rounds + 1x Short-Range SAM every 4th cycle!
+                  if (towerEntry.shotCounter % 4 !== 0) {
+                    const lead = computeBallisticLead(
+                      _spawnPos.x,
+                      _spawnPos.y,
+                      _spawnPos.z,
+                      tx,
+                      ty,
+                      tz,
+                      tvx,
+                      tvy,
+                      tvz,
+                      64,
+                      0.34
+                    );
+                    soundManager.playGatling();
+                    spawnMuzzleFlash(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0.46, 0);
+                    triggerFlashLight(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0xffc857, 7, 0.06);
+                    spawnPooledProjectile(
+                      'bullet',
+                      _spawnPos.x,
+                      _spawnPos.y,
+                      _spawnPos.z,
+                      lead.x,
+                      lead.y,
+                      lead.z,
+                      enemyTarget ? enemyTarget.instanceId : '',
+                      64,
+                      Math.round(towerState.damage * 0.94),
+                      1.15,
+                      simSec,
+                      false,
+                      bestOrdnanceIdx,
+                      false,
+                      false,
+                      'ballistic'
+                    );
+                  } else {
+                    soundManager.playMissileLaunch(false);
+                    spawnMuzzleFlash(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0.54, 1);
+                    spawnSmokePuff(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0.24, 0.5);
+                    triggerFlashLight(_spawnPos.x, _spawnPos.y, _spawnPos.z, 0xff7b00, 9, 0.12);
+                    spawnPooledProjectile(
+                      'missile',
+                      _spawnPos.x,
+                      _spawnPos.y,
+                      _spawnPos.z,
+                      tx,
+                      ty,
+                      tz,
+                      enemyTarget ? enemyTarget.instanceId : '',
+                      33,
+                      Math.round(towerState.damage * 1.42),
+                      3.4,
+                      simSec,
+                      false,
+                      bestOrdnanceIdx,
+                      false,
+                      false,
+                      'short_rocket'
+                    );
+                  }
                 } else {
                   const isHeavySam =
                     towerState.tower.id === 'patriot_battery' || towerState.tower.id === 'system_358';
@@ -4019,24 +4825,17 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                     3.8,
                     simSec,
                     isHeavySam,
-                    bestOrdnanceIdx
+                    bestOrdnanceIdx,
+                    false,
+                    false,
+                    isHeavySam ? 'radar_sam' : 'short_rocket'
                   );
                 }
               }
             }
           });
 
-          // 5. UPDATE POOLED LASERS
-          for (let i = 0; i < pools.lasers.length; i++) {
-            const slot = pools.lasers[i];
-            if (slot.active && simSec >= slot.expiresAt) {
-              slot.active = false;
-              slot.coreMesh.visible = false;
-              slot.haloMesh.visible = false;
-            }
-          }
-
-          // 6. UPDATE POOLED PROJECTILES, ORDNANCE, FLARES, CRASHING WRECKS & ALLIED CAP JETS
+          // 5. UPDATE POOLED PROJECTILES, ORDNANCE, FLARES, CRASHING WRECKS & ALLIED CAP JETS
           updateEnemyOrdnancePool(dt, simSec);
           updateProjectilePool(pools.bullets, dt, simSec);
           updateProjectilePool(pools.missiles, dt, simSec);
@@ -4132,6 +4931,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         const width = entry.contentRect.width;
         const height = entry.contentRect.height;
         if (width > 0 && height > 0) {
+          const isShortLand = height <= 540 && width > height;
+          camera.fov = isShortLand ? 58 : 54;
           camera.aspect = width / height;
           camera.updateProjectionMatrix();
           renderer.setSize(width, height);
@@ -4217,10 +5018,6 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         sa.missileFinMat.dispose();
         sa.missileFlameGeo.dispose();
         sa.missileFlameMat.dispose();
-        sa.laserCoreGeo.dispose();
-        sa.laserCoreMat.dispose();
-        sa.laserHaloGeo.dispose();
-        sa.laserHaloMat.dispose();
         sa.muzzleFlashGeo.dispose();
         sa.muzzleFlashMats.forEach((m) => m.dispose());
         sa.smokeGeo.dispose();
@@ -4443,7 +5240,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     spawnShockwaveRing(0, gy + 0.9, 0, 0x10b981, 1.2, 18, 0.95);
     triggerFlashLight(0, gy + 3, 0, 0x10b981, 16, 0.35);
 
-    const nextHp = Math.min(maxBaseHpRef.current, baseHpRef.current + 240);
+    const nextHp = Math.min(maxBaseHpRef.current, baseHpRef.current + 200);
     baseHpRef.current = nextHp;
     setBaseHp(nextHp);
   }, []);
@@ -4514,6 +5311,15 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       const mods = techModifiersRef.current;
       entry.towerState.damage = Math.round(entry.towerState.tower.damagePerShot * Math.pow(1.45, lvl - 1) * mods.damageMult);
       entry.towerState.range = Math.round(entry.towerState.tower.range * Math.pow(1.18, lvl - 1) * mods.rangeMult);
+
+      // Upgrading reinforces tower plating (+25% max HP) without acting as a free repair
+      const prevMax = entry.towerState.maxHp;
+      const armorBonusMult = 1 + Math.max(0, mods.maxBaseHp - 850) / 1900;
+      const nextMax = Math.round((entry.towerState.tower.maxHp ?? 170) * armorBonusMult * (1 + (lvl - 1) * 0.25));
+      const addedArmor = Math.max(0, nextMax - prevMax);
+      entry.towerState.maxHp = nextMax;
+      entry.towerState.hp = Math.min(nextMax, entry.towerState.hp + addedArmor);
+      entry.healthBar.updateHp(entry.towerState.hp, entry.towerState.maxHp);
 
       entry.rig.applyLevel(lvl);
 
@@ -4616,6 +5422,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         hasNextStage={hasNextStage}
         cameraMode={cameraMode}
         onSetCameraView={handleSetCameraView}
+        onZoomIn={() => handleZoomCamera(-11)}
+        onZoomOut={() => handleZoomCamera(11)}
+        onResetCamera={handleResetCamera}
         showRangeRings={showRangeRings}
         onToggleRangeRings={() => setShowRangeRings((prev) => !prev)}
         onOpenMenu={onOpenMenu}
@@ -4630,6 +5439,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         capActiveLeft={capActiveLeft}
         onTriggerCap={handleTriggerCap}
         isNightRaid={isNightRaid}
+        facilities={facilities}
+        defeatReason={defeatReason}
+        tacticalAlert={tacticalAlert}
         radarSnapshotRef={radarSnapshotRef}
         killCallouts={killCallouts}
       />

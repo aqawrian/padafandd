@@ -76,14 +76,15 @@ function getStageEnemyRoster(stage: StageConfig): StageEnemySummary[] {
 }
 
 function getUnitTraitFa(unit: EnemyUnit): string {
-  if (unit.isBoss) return 'باس هوایی · منور حرارتی';
-  if (unit.shape === 'enemy_fighter') return 'جنگنده تهاجمی · داگ‌فایت با جنگنده خودی';
+  if (unit.isBoss && unit.escortCount) return `بمب‌افکن B-2 + ${unit.escortCount} جنگنده اسکورت`;
+  if (unit.isBoss) return 'باس هوایی سنگین · منور حرارتی';
+  if (unit.shape === 'enemy_fighter') return 'جنگنده ارتفاع‌بالا · بمباران برجک و داگ‌فایت';
   if (unit.jammerRadius) return 'اخلال‌گر رادار';
   if (unit.isStealth) return 'رادارگریز (نیازمند رادار)';
   if (unit.shape === 'ballistic_missile') return 'موشک بالستیک پرسرعت';
   if (unit.shape === 'cruise_missile') return 'موشک کروز ارتفاع پست';
   if (unit.flaresCount) return 'مجهز به منور ضدموشک';
-  return 'پهپاد تهاجمی';
+  return 'پهپاد تهاجمی · حمله به برجک و پایگاه';
 }
 
 export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
@@ -144,11 +145,11 @@ export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
   return (
     <div
       dir="rtl"
-      className="fixed inset-0 z-50 bg-[#070b14]/97 backdrop-blur-sm flex flex-col safe-modal-padding overflow-y-auto"
+      className="fixed inset-0 z-50 bg-[#070b14]/97 backdrop-blur-sm flex flex-col safe-modal-padding overflow-y-auto short:overflow-hidden"
     >
-      <div className="max-w-7xl w-full mx-auto flex flex-col flex-1 gap-3.5 short:gap-2">
+      <div className="max-w-7xl w-full mx-auto flex flex-col flex-1 min-h-0 gap-3.5 short:gap-1.5">
         {/* Top Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-2.5 pb-3 short:pb-1.5 border-b border-white/10 shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-3 short:pb-1.5 border-b border-white/10 shrink-0">
           <div>
             <h2 className="text-base sm:text-xl short:text-sm font-bold text-white tracking-tight">
               نقشه عملیات تاکتیکی
@@ -158,7 +159,7 @@ export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-2.5 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             <button
               onClick={() => {
                 onClose();
@@ -167,11 +168,11 @@ export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
               className="px-3 py-1.5 sm:px-3.5 sm:py-2 short:px-2.5 short:py-1 rounded-xl bg-sky-500/12 hover:bg-sky-500/22 border border-sky-400/35 text-sky-200 text-xs short:text-[11px] font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
             >
               <Cpu className="w-3.5 h-3.5 text-sky-400" />
-              <span>آزمایشگاه فناوری</span>
+              <span>فناوری</span>
               <span className="font-mono text-amber-300 tabular-nums">({availableStars}★)</span>
             </button>
 
-            <div className="flex items-center gap-1 text-xs sm:text-sm font-mono font-semibold text-amber-300 tabular-nums">
+            <div className="flex items-center gap-1 text-xs sm:text-sm short:text-xs font-mono font-semibold text-amber-300 tabular-nums">
               <Star className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-amber-400 text-amber-400" />
               <span>{totalStars}/120</span>
             </div>
@@ -186,8 +187,8 @@ export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
           </div>
         </div>
 
-        {/* 4 Illustrated Theater Chapter Selector Tabs */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 shrink-0">
+        {/* 4 Illustrated Theater Chapter Selector Tabs (Single Row on Landscape Mobile!) */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 short:grid-cols-4 gap-2 sm:gap-3 short:gap-1.5 shrink-0">
           {CAMPAIGN_CHAPTERS.map((chap) => {
             const Icon = CHAPTER_ICONS[chap.chapter];
             const art = THEATER_ARTWORK[chap.biome];
@@ -264,10 +265,10 @@ export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
           })}
         </div>
 
-        {/* Main Tactical Workspace: Illustrated Theater Map + Detailed Mission Dossier */}
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-4 short:gap-2.5 flex-1 min-h-0">
+        {/* Main Tactical Workspace: Side-by-Side Illustrated Map + Mission Dossier (Even on Landscape Mobile!) */}
+        <div className="grid grid-cols-1 short:grid-cols-[1fr_248px] md:grid-cols-[1fr_290px] lg:grid-cols-[1fr_360px] gap-4 short:gap-2 flex-1 min-h-0">
           {/* Interactive Illustrated Tactical Operations Map */}
-          <div className="relative rounded-2xl border border-white/12 overflow-hidden bg-[#0a101d] min-h-[340px] sm:min-h-[430px] short:min-h-[250px] flex flex-col justify-between">
+          <div className="relative rounded-2xl short:rounded-xl border border-white/12 overflow-hidden bg-[#0a101d] min-h-[340px] sm:min-h-[430px] short:min-h-0 flex flex-col justify-between">
             {/* Full-bleed Theater Artwork Backdrop */}
             <div className={`absolute inset-0 bg-gradient-to-br ${theaterArt.fallbackGradient}`}>
               {!imgFailed[chapterMeta.biome] && (
@@ -321,7 +322,7 @@ export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
             </div>
 
             {/* Interactive SVG Route + 10 Tactical Stage Nodes Layer */}
-            <div className="relative z-10 flex-1 w-full min-h-[260px] sm:min-h-[340px] short:min-h-[195px]">
+            <div className="relative z-10 flex-1 w-full min-h-[260px] sm:min-h-[340px] short:min-h-0">
               {/* SVG Tactical Route Lines & Subtle Radar Range Arcs */}
               <svg
                 viewBox="0 0 100 100"
@@ -437,10 +438,10 @@ export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
                       <div
                         className={`relative flex items-center justify-center font-mono font-bold tabular-nums border-2 shadow-xl transition-colors ${
                           isBoss
-                            ? 'w-12 h-12 short:w-9 short:h-9 rounded-2xl text-sm short:text-xs'
+                            ? 'w-12 h-12 short:w-9 short:h-9 rounded-2xl short:rounded-xl text-sm short:text-xs'
                             : isMidBoss
-                              ? 'w-11 h-11 short:w-8 short:h-8 rounded-xl text-sm short:text-xs'
-                              : 'w-10 h-10 short:w-7 short:h-7 rounded-xl text-xs short:text-[11px]'
+                              ? 'w-11 h-11 short:w-8 short:h-8 rounded-xl short:rounded-lg text-sm short:text-xs'
+                              : 'w-10 h-10 short:w-8 short:h-8 rounded-xl short:rounded-lg text-xs short:text-[11px]'
                         } ${
                           !unlocked
                             ? 'bg-[#090e1a]/92 border-slate-700/80 text-slate-500'
@@ -480,9 +481,9 @@ export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
                     </div>
 
                     {/* Compact Legible Stage Caption & 3 Stars */}
-                    <div className="mt-1 px-1.5 py-0.5 rounded-md bg-[#070b14]/86 backdrop-blur-xs border border-white/10 flex flex-col items-center">
+                    <div className="mt-1 short:mt-0.5 px-1.5 py-0.5 short:px-1 rounded-md bg-[#070b14]/88 backdrop-blur-xs border border-white/10 flex flex-col items-center">
                       <span
-                        className={`text-[10px] short:text-[9px] font-semibold leading-tight whitespace-nowrap max-w-[92px] truncate ${
+                        className={`text-[10px] short:text-[8.5px] font-semibold leading-tight whitespace-nowrap max-w-[92px] short:max-w-[68px] truncate ${
                           isSelected
                             ? 'text-amber-300'
                             : unlocked
@@ -530,9 +531,9 @@ export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
             </div>
           </div>
 
-          {/* Right/Side Detailed Tactical Mission Dossier */}
-          <aside className="rounded-2xl border border-white/12 bg-[#0c1322] p-4 sm:p-5 short:p-3 flex flex-col justify-between gap-4 short:gap-2.5">
-            <div className="space-y-4 short:space-y-2.5">
+          {/* Right/Side Detailed Tactical Mission Dossier (Internal Scroll + Pinned Launch CTA on Landscape Mobile!) */}
+          <aside className="rounded-2xl short:rounded-xl border border-white/12 bg-[#0c1322] p-4 sm:p-5 short:p-2.5 flex flex-col justify-between gap-4 short:gap-2 min-h-0">
+            <div className="space-y-4 short:space-y-2 flex-1 min-h-0 overflow-y-auto no-scrollbar">
               {/* Stage Header */}
               <div className="pb-3 short:pb-2 border-b border-white/10">
                 <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
@@ -559,7 +560,7 @@ export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
                 </p>
 
                 {/* Operation Conditions (Clean unboxed metadata with separators) */}
-                {(previewStage.modifier !== 'none' || previewStage.isNightStage) && (
+                {(previewStage.modifier !== 'none' || previewStage.isNightStage || previewStage.secondaryObjectives) && (
                   <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-medium">
                     {previewStage.isNightStage && (
                       <span className="inline-flex items-center gap-1 text-sky-300">
@@ -571,6 +572,16 @@ export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
                       <span className="inline-flex items-center gap-1 text-rose-300">
                         <ShieldAlert className="w-3.5 h-3.5" />
                         {previewStage.modifierLabelFa}
+                      </span>
+                    )}
+                    {previewStage.secondaryObjectives && (
+                      <span
+                        className={`inline-flex items-center gap-1 ${
+                          previewStage.secondaryObjectives.failOnAllLost ? 'text-rose-300' : 'text-amber-300'
+                        }`}
+                      >
+                        <ShieldAlert className="w-3.5 h-3.5" />
+                        {previewStage.secondaryObjectives.labelFa}
                       </span>
                     )}
                   </div>
@@ -681,8 +692,8 @@ export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
               </div>
             </div>
 
-            {/* Dominant Launch Action */}
-            <div className="pt-2 border-t border-white/10 space-y-2">
+            {/* Dominant Launch Action (Always Visible at Bottom of Dossier!) */}
+            <div className="pt-2 short:pt-1.5 border-t border-white/10 space-y-2 shrink-0">
               <button
                 disabled={!isPreviewUnlocked}
                 onClick={() => {
@@ -708,7 +719,9 @@ export const CampaignRoadmap: React.FC<CampaignRoadmapProps> = ({
                 )}
               </button>
               <p className="text-[10px] text-slate-500 text-center short:hidden">
-                برای کسب ۳ ستاره، سلامت پایگاه را بالای ۹۰٪ حفظ کنید
+                {previewStage.secondaryObjectives
+                  ? 'برای کسب ۳ ستاره، سلامت پایگاه بالای ۹۰٪ و تمامی بانکرها و مخزن سوخت را سالم نگه دارید'
+                  : 'برای کسب ۳ ستاره، سلامت پایگاه را بالای ۹۰٪ حفظ کنید'}
               </p>
             </div>
           </aside>

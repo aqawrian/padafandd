@@ -57,10 +57,10 @@ export const TechLabModal: React.FC<TechLabModalProps> = ({
   return (
     <div
       dir="rtl"
-      className="fixed inset-0 z-50 bg-[#070b14]/96 flex flex-col justify-between safe-modal-padding overflow-y-auto"
+      className="fixed inset-0 z-50 bg-[#070b14]/97 flex flex-col justify-between safe-modal-padding overflow-y-auto"
     >
-      {/* Top Bar */}
-      <div className="max-w-5xl w-full mx-auto flex flex-wrap items-center justify-between gap-2.5 sm:gap-4 pb-3 short:pb-2 border-b border-white/10">
+      {/* Sticky Top Bar */}
+      <div className="sticky top-0 z-20 bg-[#070b14]/95 backdrop-blur-md max-w-5xl w-full mx-auto flex flex-wrap items-center justify-between gap-2.5 sm:gap-4 pb-3 short:pb-1.5 pt-0.5 border-b border-white/10">
         <div>
           <h2 className="text-base sm:text-xl short:text-sm font-bold text-white tracking-tight">
             آزمایشگاه فناوری و دکترین فرماندهی
@@ -160,7 +160,7 @@ export const TechLabModal: React.FC<TechLabModalProps> = ({
                 <button
                   disabled={!canBuy}
                   onClick={() => onUpgradeTech(doc.id)}
-                  className={`mt-3.5 short:mt-2 w-full py-2.5 short:py-1.5 rounded-xl short:rounded-lg text-xs short:text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                  className={`mt-3.5 short:mt-2 w-full py-2.5 short:py-2 short:min-h-[34px] rounded-xl short:rounded-lg text-xs short:text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
                     isMax
                       ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 cursor-default'
                       : canBuy
@@ -201,7 +201,7 @@ export const TechLabModal: React.FC<TechLabModalProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 short:grid-cols-6 gap-2 mt-3 short:mt-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 short:grid-cols-3 lg:grid-cols-6 gap-2 mt-3 short:mt-2">
             {ACHIEVEMENTS.map((ach) => {
               const unlocked = profile.achievements.includes(ach.id);
               return (

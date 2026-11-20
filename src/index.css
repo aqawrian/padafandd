@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-@custom-variant short (@media (max-height: 520px));
+@custom-variant short (@media (max-height: 540px));
 
 @theme {
   --font-sans: "Vazirmatn", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
@@ -37,12 +37,12 @@
   padding-right: max(0.75rem, env(safe-area-inset-right));
 }
 
-@media (max-height: 520px) {
+@media (max-height: 540px) {
   .safe-hud-padding {
     padding-top: max(0.35rem, env(safe-area-inset-top));
     padding-bottom: max(0.3rem, env(safe-area-inset-bottom));
-    padding-left: max(0.5rem, env(safe-area-inset-left));
-    padding-right: max(0.5rem, env(safe-area-inset-right));
+    padding-left: max(0.55rem, env(safe-area-inset-left));
+    padding-right: max(0.55rem, env(safe-area-inset-right));
   }
 }
 
@@ -53,12 +53,40 @@
   padding-right: max(1rem, env(safe-area-inset-right));
 }
 
-@media (max-height: 520px) {
+@media (max-height: 540px) {
   .safe-modal-padding {
-    padding-top: max(0.5rem, env(safe-area-inset-top));
-    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+    padding-top: max(0.45rem, env(safe-area-inset-top));
+    padding-bottom: max(0.45rem, env(safe-area-inset-bottom));
     padding-left: max(0.75rem, env(safe-area-inset-left));
     padding-right: max(0.75rem, env(safe-area-inset-right));
+  }
+}
+
+.safe-x-padding {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+
+@media (max-height: 540px) {
+  .safe-x-padding {
+    padding-left: max(0.85rem, env(safe-area-inset-left));
+    padding-right: max(0.85rem, env(safe-area-inset-right));
+  }
+}
+
+.safe-drawer-padding {
+  padding-top: max(1.25rem, env(safe-area-inset-top));
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1.25rem, env(safe-area-inset-right));
+}
+
+@media (max-height: 540px) {
+  .safe-drawer-padding {
+    padding-top: max(0.65rem, env(safe-area-inset-top));
+    padding-bottom: max(0.65rem, env(safe-area-inset-bottom));
+    padding-left: max(0.85rem, env(safe-area-inset-left));
+    padding-right: max(0.85rem, env(safe-area-inset-right));
   }
 }
 

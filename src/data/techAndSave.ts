@@ -50,7 +50,7 @@ export const TECH_DOCTRINES: TechDoctrine[] = [
     titleFa: 'زره کامپوزیت پایگاه',
     subtitleFa: 'افزایش مقاومت و حداکثر سلامت پناهگاه مرکزی',
     costs: [2, 3, 6],
-    levelLabels: ['+۲۰۰ سلامت', '+۴۵۰ سلامت', '+۷۵۰ سلامت'],
+    levelLabels: ['+۱۷۰ سلامت', '+۳۸۰ سلامت', '+۶۴۰ سلامت'],
     accent: 'emerald',
   },
   {
@@ -108,7 +108,7 @@ export function computeTechModifiers(levels: Record<TechId, number>): TechModifi
     rangeMult: [1.0, 1.1, 1.18, 1.28][rn] ?? 1.0,
     startingCashBonus: [0, 55, 120, 195][we] ?? 0,
     killBountyMult: [1.0, 1.08, 1.15, 1.22][we] ?? 1.0,
-    maxBaseHp: 1000 + ([0, 200, 450, 750][ba] ?? 0),
+    maxBaseHp: 850 + ([0, 170, 380, 640][ba] ?? 0),
     cooldownMult: [1.0, 0.88, 0.78, 0.68][rc] ?? 1.0,
     missileSplashRadius: [0, 3.2, 4.6, 6.0][bw] ?? 0,
   };

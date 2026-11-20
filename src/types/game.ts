@@ -52,9 +52,33 @@ export interface SaveProfileV2 {
 export interface RadarEntityBlip {
   x: number;
   z: number;
-  kind: 'tower' | 'radar_tower' | 'ally_fighter' | 'enemy' | 'boss' | 'stealth' | 'jammer' | 'ordnance';
+  kind: 'tower' | 'radar_tower' | 'facility' | 'ally_fighter' | 'enemy' | 'boss' | 'stealth' | 'jammer' | 'ordnance';
   color?: string;
 }
+
+export type FacilityKind = 'ammo_bunker' | 'fuel_depot';
+
+export interface StageFacilitySpec {
+  id: string;
+  kind: FacilityKind;
+  titleFa: string;
+  x: number;
+  z: number;
+  maxHp: number;
+}
+
+export interface BaseFacilityStatus {
+  id: string;
+  kind: FacilityKind;
+  titleFa: string;
+  hp: number;
+  maxHp: number;
+  alive: boolean;
+  x: number;
+  z: number;
+}
+
+export type DefeatReason = 'hq_destroyed' | 'facilities_lost';
 
 export interface RadarZone {
   x: number;
@@ -101,6 +125,7 @@ export interface EnemyUnit {
     | 'swept_drone'
     | 'scout_hex'
     | 'heavy_bomber'
+    | 'b2_spirit'
     | 'cruise_missile'
     | 'loiter_pod'
     | 'stealth_wing'
@@ -119,28 +144,36 @@ export interface EnemyUnit {
   isStealth?: boolean;
   jammerRadius?: number;
   isBoss?: boolean;
+  isHeavyStrategic?: boolean;
+  escortUnitId?: string;
+  escortCount?: number;
   flaresCount?: number;
   flareCooldownSec?: number;
   canCrashWreck?: boolean;
 }
+
+export type TowerTier = 1 | 2 | 3 | 4;
 
 export interface DefenseTower {
   id: string;
   name: string;
   persianName?: string;
   type: string;
+  tier: TowerTier;
+  tierLabelFa: string;
   buildCost: number;
+  maxHp: number;
   damagePerShot: number;
   fireRate: number; // shots/sec
   range: number; // meters
   weakness: string;
+  strategicTargetOnly?: boolean;
   shape:
     | 'gatling_box'
     | 'missile_battery'
     | 'silo_vertical'
-    | 'laser_turret'
     | 'radar_dish'
-    | 'railgun_cannon'
+    | 's400_launcher'
     | 'iron_dome_pod';
   color: string;
   description: string;
@@ -174,6 +207,8 @@ export interface ActiveTower {
   y: number;
   z: number;
   level: number;
+  hp: number;
+  maxHp: number;
   damage: number;
   range: number;
   fireRate: number;
@@ -188,7 +223,7 @@ export interface ActiveTower {
 
 export interface Projectile {
   id: string;
-  type: 'bullet' | 'missile' | 'laser';
+  type: 'bullet' | 'missile';
   x: number;
   y: number;
   z: number;
@@ -246,6 +281,11 @@ export interface StageConfig {
   isBossStage: boolean;
   isMidBossStage?: boolean;
   isNightStage?: boolean;
+  secondaryObjectives?: {
+    facilities: StageFacilitySpec[];
+    failOnAllLost: boolean;
+    labelFa: string;
+  };
   startingCash: number;
   starterTowers: { towerId: string; x: number; z: number }[];
   hpMultiplier: number;

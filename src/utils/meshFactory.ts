@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DefenseTower, EnemyUnit } from '../types/game';
+import { DefenseTower, EnemyUnit, FacilityKind } from '../types/game';
 
 /**
  * Crash-Proof High-Detail Procedural 3D Military Mesh Factory for Air Shield (پدافند هوایی)
@@ -61,12 +61,21 @@ function getSharedMat<T extends THREE.Material>(key: string, factory: () => T): 
 }
 
 // Zero-Canvas, Zero-Texture 3D Health Bar (100% shared geometry & 4 shared materials!)
-export function createHealthBarBillboard(maxHp: number, isBoss = false): {
+export function createHealthBarBillboard(
+  maxHp: number,
+  sizeClass: boolean | 'small' | 'medium' | 'boss' = 'medium'
+): {
   mesh: THREE.Object3D;
-  updateHp: (current: number) => void;
+  updateHp: (current: number, maxOverride?: number) => void;
 } {
-  const barWidth = isBoss ? 4.8 : 2.8;
-  const barHeight = isBoss ? 0.44 : 0.3;
+  const tier =
+    sizeClass === true || sizeClass === 'boss'
+      ? 'boss'
+      : sizeClass === 'small'
+        ? 'small'
+        : 'medium';
+  const barWidth = tier === 'boss' ? 3.25 : tier === 'small' ? 1.55 : 2.05;
+  const barHeight = tier === 'boss' ? 0.34 : tier === 'small' ? 0.2 : 0.25;
 
   const planeGeo = getSharedGeo('hp_plane', () => new THREE.PlaneGeometry(1, 1));
   const bgMat = getSharedMat('hp_bg', () =>
@@ -83,10 +92,10 @@ export function createHealthBarBillboard(maxHp: number, isBoss = false): {
   );
 
   const holder = new THREE.Group();
-  holder.position.y = isBoss ? 3.3 : 2.35;
+  holder.position.y = tier === 'boss' ? 2.55 : tier === 'small' ? 1.4 : 1.85;
 
   const bgMesh = new THREE.Mesh(planeGeo, bgMat);
-  bgMesh.scale.set(barWidth + 0.16, barHeight + 0.14, 1);
+  bgMesh.scale.set(barWidth + 0.14, barHeight + 0.12, 1);
   bgMesh.renderOrder = 10;
   holder.add(bgMesh);
 
@@ -96,15 +105,18 @@ export function createHealthBarBillboard(maxHp: number, isBoss = false): {
   fillMesh.renderOrder = 11;
   holder.add(fillMesh);
 
-  const safeMax = Math.max(1, maxHp);
-  const updateHp = (current: number) => {
-    const ratio = Math.max(0.001, Math.min(1, current / safeMax));
+  let currentMax = Math.max(1, maxHp);
+  const updateHp = (current: number, maxOverride?: number) => {
+    if (typeof maxOverride === 'number' && maxOverride > 0) {
+      currentMax = maxOverride;
+    }
+    const ratio = Math.max(0.001, Math.min(1, current / currentMax));
     fillMesh.scale.x = barWidth * ratio;
     fillMesh.position.x = -(barWidth * (1 - ratio)) * 0.5;
     fillMesh.material = ratio > 0.6 ? greenMat : ratio > 0.3 ? amberMat : redMat;
   };
 
-  updateHp(safeMax);
+  updateHp(currentMax);
   return { mesh: holder, updateHp };
 }
 
@@ -791,101 +803,7 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
     tier3Parts.push(heatShield);
   }
 
-  // 5. LASER BEAM-C — High-Energy Optical Turret + Gyro Focusing Rings + Capacitors
-  else if (tower.id === 'laser_beam_c') {
-    const col = new THREE.Mesh(
-      getSharedGeo('las_col', () => new THREE.CylinderGeometry(0.74, 0.96, 0.85, 8)),
-      baseMat
-    );
-    col.position.y = 0.05;
-    col.castShadow = true;
-    turretHead.add(col);
-
-    const armGeo = getSharedGeo('las_arm', () => new THREE.BoxGeometry(0.22, 0.95, 0.46));
-    for (const sx of [-0.72, 0.72]) {
-      const arm = new THREE.Mesh(armGeo, darkArmorMat);
-      arm.position.set(sx, 0.68, 0);
-      turretHead.add(arm);
-    }
-
-    const sphereShell = new THREE.Mesh(
-      getSharedGeo('las_sphere', () => new THREE.SphereGeometry(0.64, 10, 8)),
-      darkArmorMat
-    );
-    sphereShell.position.set(0, 0.88, 0);
-    sphereShell.castShadow = true;
-    turretHead.add(sphereShell);
-
-    const plasmaMat = new THREE.MeshStandardMaterial({
-      color: 0x22d3ee,
-      emissive: 0x22d3ee,
-      emissiveIntensity: 1.7,
-      roughness: 0.2,
-      metalness: 0.1,
-    });
-    pulseMats.push({ mat: plasmaMat, base: 1.5, boost: 3.2 });
-
-    const lensBarrel = new THREE.Mesh(
-      getSharedGeo('las_barrel', () => {
-        const g = new THREE.CylinderGeometry(0.26, 0.38, 1.05, 8);
-        g.rotateX(Math.PI / 2);
-        return g;
-      }),
-      gunmetalMat
-    );
-    lensBarrel.position.set(0, 0.88, 0.72);
-    turretHead.add(lensBarrel);
-
-    const aperture = new THREE.Mesh(
-      getSharedGeo('las_ap', () => {
-        const g = new THREE.CylinderGeometry(0.2, 0.2, 0.12, 8);
-        g.rotateX(Math.PI / 2);
-        return g;
-      }),
-      plasmaMat
-    );
-    aperture.position.set(0, 0.88, 1.24);
-    turretHead.add(aperture);
-
-    const gyroRing1 = new THREE.Mesh(
-      getSharedGeo('las_gyro', () => new THREE.TorusGeometry(0.42, 0.055, 6, 12)),
-      opticCyanMat
-    );
-    gyroRing1.position.set(0, 0.88, 0.88);
-    turretHead.add(gyroRing1);
-    spinners.push({ obj: gyroRing1, axis: 'z', baseSpeed: 1.4, fireSpeed: 10.5 });
-
-    registerMuzzle(turretHead, 0, 0.88, 1.32);
-
-    const capShellGeo = getSharedGeo('las_capS', () => new THREE.CylinderGeometry(0.22, 0.22, 0.95, 8));
-    const capCoreGeo = getSharedGeo('las_capC', () => new THREE.CylinderGeometry(0.24, 0.24, 0.45, 8));
-    for (const sx of [-1.02, 1.02]) {
-      const capGroup = new THREE.Group();
-      capGroup.position.set(sx, 0.55, -0.1);
-      capGroup.visible = false;
-      capGroup.add(new THREE.Mesh(capShellGeo, darkArmorMat));
-      capGroup.add(new THREE.Mesh(capCoreGeo, plasmaMat));
-      turretHead.add(capGroup);
-      tier2Parts.push(capGroup);
-    }
-
-    const shroudGroup = new THREE.Group();
-    shroudGroup.position.set(0, 0.88, 1.15);
-    shroudGroup.visible = false;
-    shroudGroup.add(new THREE.Mesh(getSharedGeo('las_outer', () => new THREE.TorusGeometry(0.56, 0.06, 6, 8)), goldTrimMat));
-    const prongGeo = getSharedGeo('las_prong', () => new THREE.BoxGeometry(0.08, 0.08, 0.72));
-    for (let i = 0; i < 3; i++) {
-      const a = (i / 3) * Math.PI * 2;
-      const prong = new THREE.Mesh(prongGeo, goldTrimMat);
-      prong.position.set(Math.cos(a) * 0.42, Math.sin(a) * 0.42, 0.22);
-      shroudGroup.add(prong);
-    }
-    turretHead.add(shroudGroup);
-    tier3Parts.push(shroudGroup);
-    spinners.push({ obj: shroudGroup, axis: 'z', baseSpeed: -1.8, fireSpeed: -14 });
-  }
-
-  // 6. AVENGER STINGER — Armored Gunner Cab + Dual Quad Stinger Pods
+  // 5. AVENGER STINGER — Armored Gunner Cab + Dual Quad Stinger Pods
   else if (tower.id === 'avenger_stinger') {
     const cab = new THREE.Mesh(
       getSharedGeo('avg_cab', () => new THREE.BoxGeometry(0.92, 0.78, 1.18)),
@@ -1115,103 +1033,147 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
     tier3Parts.push(goldBar);
   }
 
-  // 8. RAILGUN TURRET — Hypersonic Electromagnetic Twin-Rail Accelerator Cannon
-  else if (tower.id === 'railgun_turret') {
-    const housing = new THREE.Mesh(
-      getSharedGeo('rg_house', () => new THREE.BoxGeometry(1.52, 0.72, 1.92)),
-      baseMat
-    );
-    housing.position.set(0, 0.16, -0.15);
-    housing.castShadow = true;
-    turretHead.add(housing);
+  // 7. S-400 / THAAD — Real-World Vertical Cold-Launch Strategic Anti-Ballistic TEL Battery
+  else if (tower.id === 's400_thaad') {
+    const oliveArmorMat = getArmorMat(0x364137, 0.58, 0.34);
 
-    const armorSlope = new THREE.Mesh(
-      getSharedGeo('rg_slope', () => new THREE.BoxGeometry(1.36, 0.44, 0.88)),
+    // Heavy armored 8x8 TEL deck chassis & stabilizer outrigger frame
+    const chassis = new THREE.Mesh(
+      getSharedGeo('s400_chas', () => new THREE.BoxGeometry(2.08, 0.46, 2.38)),
       darkArmorMat
     );
-    armorSlope.position.set(0, 0.62, -0.42);
-    armorSlope.rotation.x = 0.22;
-    turretHead.add(armorSlope);
+    chassis.position.set(0, -0.08, 0);
+    chassis.castShadow = true;
+    turretHead.add(chassis);
 
-    const railGlowMat = new THREE.MeshStandardMaterial({
-      color: 0x38bdf8,
-      emissive: 0x38bdf8,
-      emissiveIntensity: 1.8,
-      roughness: 0.18,
-      metalness: 0.2,
+    // Armored forward fire-control cab with tinted command visor
+    const ctrlCab = new THREE.Mesh(
+      getSharedGeo('s400_cab', () => new THREE.BoxGeometry(1.66, 0.56, 0.76)),
+      oliveArmorMat
+    );
+    ctrlCab.position.set(0, 0.38, 0.78);
+    ctrlCab.castShadow = true;
+    turretHead.add(ctrlCab);
+
+    const visorMat = getGlowMat(0xf59e0b, 1.15);
+    const cabVisor = new THREE.Mesh(
+      getSharedGeo('s400_vis', () => new THREE.BoxGeometry(1.24, 0.16, 0.08)),
+      visorMat
+    );
+    cabVisor.position.set(0, 0.48, 1.17);
+    turretHead.add(cabVisor);
+
+    // Rear thermal exhaust blast deflector skirt
+    const blastSkirt = new THREE.Mesh(
+      getSharedGeo('s400_blast', () => new THREE.BoxGeometry(1.92, 0.38, 0.55)),
+      gunmetalMat
+    );
+    blastSkirt.position.set(0, 0.24, -1.04);
+    blastSkirt.rotation.x = -0.35;
+    turretHead.add(blastSkirt);
+
+    // Twin hydraulic erection pistons supporting the vertical canister frame
+    const pistonGeo = getSharedGeo('s400_pist', () => new THREE.CylinderGeometry(0.075, 0.095, 1.45, 6));
+    for (const sx of [-0.76, 0.76]) {
+      const piston = new THREE.Mesh(pistonGeo, lightCeramicMat);
+      piston.position.set(sx, 0.72, 0.08);
+      piston.rotation.x = -0.22;
+      turretHead.add(piston);
+    }
+
+    // Erected Vertical Cold-Launch Canister Frame (~80 deg steep S-400/THAAD posture)
+    const erector = new THREE.Group();
+    erector.position.set(0, 0.36, -0.36);
+    erector.rotation.x = -0.16;
+    turretHead.add(erector);
+    recoilParts.push({ obj: erector, restZ: -0.36, kick: 0.16 });
+
+    const tubeGeo = getSharedGeo('s400_tube', () => new THREE.CylinderGeometry(0.24, 0.26, 2.95, 10));
+    const bandGeo = getSharedGeo('s400_band', () => new THREE.CylinderGeometry(0.275, 0.275, 0.14, 10));
+    const capGeo = getSharedGeo('s400_cap', () => new THREE.CylinderGeometry(0.23, 0.24, 0.1, 10));
+
+    const buildVerticalCanister = (x: number, z: number, bodyMat: THREE.Material, capMat: THREE.Material, cast = false) => {
+      const c = new THREE.Group();
+      c.position.set(x, 1.45, z);
+      const body = new THREE.Mesh(tubeGeo, bodyMat);
+      body.castShadow = cast;
+      c.add(body);
+      for (const ry of [-0.95, 0, 0.95]) {
+        const band = new THREE.Mesh(bandGeo, gunmetalMat);
+        band.position.y = ry;
+        c.add(band);
+      }
+      const cap = new THREE.Mesh(capGeo, capMat);
+      cap.position.y = 1.5;
+      c.add(cap);
+      return c;
+    };
+
+    // Level 1: 4 Vertical Strategic Launch Tubes (2x2)
+    const baseTubes: [number, number][] = [
+      [-0.32, 0.26],
+      [0.32, 0.26],
+      [-0.32, -0.32],
+      [0.32, -0.32],
+    ];
+    baseTubes.forEach(([tx, tz], idx) => {
+      erector.add(buildVerticalCanister(tx, tz, oliveArmorMat, baseMat, idx < 2));
+      registerMuzzle(erector, tx, 3.05, tz);
     });
-    pulseMats.push({ mat: railGlowMat, base: 1.4, boost: 3.4 });
 
-    const barrelAssembly = new THREE.Group();
-    barrelAssembly.position.set(0, 0.42, 0.55);
-    turretHead.add(barrelAssembly);
-    recoilParts.push({ obj: barrelAssembly, restZ: 0.55, kick: 0.34 });
-
-    // Twin heavy parallel electromagnetic rails (top & bottom)
-    const railBarGeo = getSharedGeo('rg_rail', () => new THREE.BoxGeometry(0.28, 0.16, 2.75));
-    for (const sy of [-0.18, 0.18]) {
-      const rail = new THREE.Mesh(railBarGeo, gunmetalMat);
-      rail.position.set(0, sy, 1.32);
-      rail.castShadow = true;
-      barrelAssembly.add(rail);
-    }
-
-    // Glowing cyan magnetic plasma channel between the twin rails
-    const plasmaChannel = new THREE.Mesh(
-      getSharedGeo('rg_chan', () => new THREE.BoxGeometry(0.14, 0.18, 2.65)),
-      railGlowMat
+    // Steel truss cradle binding the 4 tubes
+    const trussFrame = new THREE.Mesh(
+      getSharedGeo('s400_truss', () => new THREE.BoxGeometry(1.32, 0.24, 1.2)),
+      gunmetalMat
     );
-    plasmaChannel.position.set(0, 0, 1.3);
-    barrelAssembly.add(plasmaChannel);
+    trussFrame.position.set(0, 0.95, -0.03);
+    erector.add(trussFrame);
 
-    // 4 Electromagnetic Accelerator Coils clamped along the rails
-    const coilGeo = getSharedGeo('rg_coil', () => new THREE.BoxGeometry(0.56, 0.58, 0.14));
-    for (const cz of [0.45, 1.08, 1.72, 2.35]) {
-      const coil = new THREE.Mesh(coilGeo, darkArmorMat);
-      coil.position.set(0, 0, cz);
-      barrelAssembly.add(coil);
+    // Level 2: +2 Outer Strategic Launch Tubes (6-Tube Battery) + 92N6E Fire-Control Radar Mast
+    for (const tx of [-0.88, 0.88]) {
+      const extTube = buildVerticalCanister(tx, -0.03, oliveArmorMat, opticAmberMat);
+      extTube.visible = false;
+      erector.add(extTube);
+      tier2Parts.push(extTube);
     }
 
-    // Rear core reactor drum
-    const coreDrum = new THREE.Mesh(
-      getSharedGeo('rg_core', () => new THREE.CylinderGeometry(0.32, 0.36, 0.65, 8)),
-      railGlowMat
-    );
-    coreDrum.rotation.z = Math.PI / 2;
-    coreDrum.position.set(0, 0.32, -1.16);
-    turretHead.add(coreDrum);
+    const fcRadar = new THREE.Group();
+    fcRadar.position.set(0.62, 0.86, 0.78);
+    fcRadar.visible = false;
+    fcRadar.add(new THREE.Mesh(getSharedGeo('s400_rpole', () => new THREE.CylinderGeometry(0.07, 0.1, 0.56, 6)), gunmetalMat));
+    const fcPanel = new THREE.Mesh(getSharedGeo('s400_rpan', () => new THREE.BoxGeometry(0.86, 0.44, 0.14)), lightCeramicMat);
+    fcPanel.position.y = 0.42;
+    fcPanel.rotation.x = -0.22;
+    fcRadar.add(fcPanel);
+    turretHead.add(fcRadar);
+    tier2Parts.push(fcRadar);
+    spinners.push({ obj: fcRadar, axis: 'y', baseSpeed: 2.2, fireSpeed: 3.4 });
 
-    registerMuzzle(barrelAssembly, 0, 0, 2.75);
-
-    // Level 2: Flanking Twin Supercapacitor Banks + Side Cooling Vents
-    const capGeo = getSharedGeo('rg_cap', () => new THREE.BoxGeometry(0.38, 0.54, 1.48));
-    const capStripGeo = getSharedGeo('rg_capstrip', () => new THREE.BoxGeometry(0.42, 0.12, 1.2));
-    for (const sx of [-0.96, 0.96]) {
-      const capBank = new THREE.Group();
-      capBank.position.set(sx, 0.24, -0.1);
-      capBank.visible = false;
-      capBank.add(new THREE.Mesh(capGeo, darkArmorMat));
-      capBank.add(new THREE.Mesh(capStripGeo, railGlowMat));
-      turretHead.add(capBank);
-      tier2Parts.push(capBank);
+    // Level 3: Full 8-Tube Strategic Battery + Gold Command Gantry & Telemetry Radome
+    for (const tx of [-0.88, 0.88]) {
+      const rearTube = buildVerticalCanister(tx, -0.58, darkArmorMat, goldTrimMat);
+      rearTube.visible = false;
+      erector.add(rearTube);
+      tier3Parts.push(rearTube);
     }
 
-    // Level 3: Gold Magnetic Stabilizer Wings + Extended Overcharge Fin
-    const finGeo = getSharedGeo('rg_fin', () => new THREE.BoxGeometry(0.88, 0.08, 1.85));
-    const stabWings = new THREE.Mesh(finGeo, goldTrimMat);
-    stabWings.position.set(0, 0, 1.45);
-    stabWings.visible = false;
-    barrelAssembly.add(stabWings);
-    tier3Parts.push(stabWings);
-
-    const upperFin = new THREE.Mesh(
-      getSharedGeo('rg_upfin', () => new THREE.BoxGeometry(0.12, 0.32, 1.6)),
+    const goldCollar = new THREE.Mesh(
+      getSharedGeo('s400_gcol', () => new THREE.BoxGeometry(2.3, 0.14, 0.18)),
       goldTrimMat
     );
-    upperFin.position.set(0, 0.38, 1.25);
-    upperFin.visible = false;
-    barrelAssembly.add(upperFin);
-    tier3Parts.push(upperFin);
+    goldCollar.position.set(0, 2.38, 0.46);
+    goldCollar.visible = false;
+    erector.add(goldCollar);
+    tier3Parts.push(goldCollar);
+
+    const satDome = new THREE.Mesh(
+      getSharedGeo('s400_dome', () => new THREE.SphereGeometry(0.32, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2)),
+      lightCeramicMat
+    );
+    satDome.position.set(-0.56, 0.66, 0.78);
+    satDome.visible = false;
+    turretHead.add(satDome);
+    tier3Parts.push(satDome);
   }
 
   // 9. RADAR UPLINK — Phased-Array 3D Surveillance Mast + Parabolic Dish
@@ -1361,10 +1323,9 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
   };
 
   const TOWER_SCALES: Record<string, number> = {
+    s400_thaad: 0.78,
     patriot_battery: 0.76,
     radar_uplink: 0.78,
-    railgun_turret: 0.8,
-    laser_beam_c: 0.8,
     pantsir_point: 0.8,
     system_358: 0.8,
     iron_dome_pod: 0.82,
@@ -1626,36 +1587,87 @@ export function buildEnemy3D(enemy: EnemyUnit): EnemyRig {
     strip.position.set(0, 0.15, 0.15);
     group.add(strip);
   } else if (enemy.shape === 'jammer_orb') {
-    const hull = new THREE.Mesh(getSharedGeo('en_jam_h', () => new THREE.OctahedronGeometry(0.88, 0)), droneMat);
-    hull.scale.set(1.22, 0.66, 1.52);
-    hull.castShadow = true;
-    group.add(hull);
+    // Realistic Twin-Engine Electronic Warfare / AWACS Jammer Aircraft (EA-18G / Il-22PP style)
+    const ewHullMat = getArmorMat(0x475569, 0.45, 0.52);
+    const radomeMat = getArmorMat(0xcbd5e1, 0.36, 0.22);
 
-    const wingBar = new THREE.Mesh(
-      getSharedGeo('en_jam_w', () => new THREE.BoxGeometry(3.6, 0.12, 0.56)),
-      getArmorMat(0x312e81, 0.4, 0.65)
+    const fuselage = new THREE.Mesh(
+      getSharedGeo('en_ew_fus', () => {
+        const g = new THREE.CylinderGeometry(0.36, 0.42, 3.3, 8);
+        g.rotateX(Math.PI / 2);
+        return g;
+      }),
+      ewHullMat
     );
-    wingBar.position.set(0, 0.12, 0);
-    group.add(wingBar);
+    fuselage.castShadow = true;
+    group.add(fuselage);
 
-    const jamCore = new THREE.Mesh(
-      getSharedGeo('en_jam_c', () => new THREE.SphereGeometry(0.44, 6, 6)),
-      getBasicGlowMat(0xc084fc)
+    const nose = new THREE.Mesh(
+      getSharedGeo('en_ew_nose', () => {
+        const g = new THREE.ConeGeometry(0.36, 0.92, 8);
+        g.rotateX(Math.PI / 2);
+        return g;
+      }),
+      darkMat
     );
-    jamCore.position.set(0, -0.42, 0);
-    group.add(jamCore);
+    nose.position.z = 2.1;
+    group.add(nose);
 
+    const wings = new THREE.Mesh(
+      getSharedGeo('en_ew_wing', () => new THREE.BoxGeometry(4.4, 0.14, 0.96)),
+      ewHullMat
+    );
+    wings.position.set(0, 0.04, 0.12);
+    wings.castShadow = true;
+    group.add(wings);
+
+    // Underwing ALQ-style EW jamming pods
+    const podGeo = getSharedGeo('en_ew_pod', () => {
+      const g = new THREE.CylinderGeometry(0.14, 0.14, 1.35, 6);
+      g.rotateX(Math.PI / 2);
+      return g;
+    });
+    for (const sx of [-1.25, 1.25]) {
+      const pod = new THREE.Mesh(podGeo, darkMat);
+      pod.position.set(sx, -0.22, 0.15);
+      group.add(pod);
+    }
+
+    // Dorsal AWACS / EW rotodome dish
+    const strut = new THREE.Mesh(
+      getSharedGeo('en_ew_str', () => new THREE.BoxGeometry(0.16, 0.48, 0.42)),
+      darkMat
+    );
+    strut.position.set(0, 0.48, -0.2);
+    group.add(strut);
+
+    const rotodome = new THREE.Mesh(
+      getSharedGeo('en_ew_dish', () => new THREE.CylinderGeometry(0.86, 0.86, 0.18, 12)),
+      radomeMat
+    );
+    rotodome.position.set(0, 0.78, -0.2);
+    group.add(rotodome);
+
+    const tail = new THREE.Mesh(getSharedGeo('en_ew_tail', () => new THREE.BoxGeometry(1.7, 0.1, 0.52)), ewHullMat);
+    tail.position.set(0, 0.15, -1.55);
+    group.add(tail);
+    const tailFin = new THREE.Mesh(getSharedGeo('en_ew_tfin', () => new THREE.BoxGeometry(0.12, 0.85, 0.62)), darkMat);
+    tailFin.position.set(0, 0.56, -1.55);
+    group.add(tailFin);
+
+    // Subtle electromagnetic jammer sweep ring beneath aircraft
     const jamRing = new THREE.Mesh(
-      getSharedGeo('en_jam_r', () => new THREE.TorusGeometry(1.55, 0.075, 5, 16)),
-      getBasicGlowMat(0xa855f7, 0.72)
+      getSharedGeo('en_jam_r', () => new THREE.TorusGeometry(1.45, 0.045, 5, 18)),
+      getBasicGlowMat(0x818cf8, 0.48)
     );
     jamRing.rotation.x = Math.PI / 2;
+    jamRing.position.y = -0.35;
     group.add(jamRing);
     orbitRings.push(jamRing);
   } else if (enemy.shape === 'ballistic_missile') {
     const body = new THREE.Mesh(
       getSharedGeo('en_bm_b', () => {
-        const g = new THREE.CylinderGeometry(0.34, 0.42, 3.6, 8);
+        const g = new THREE.CylinderGeometry(0.3, 0.38, 3.4, 8);
         g.rotateX(Math.PI / 2);
         return g;
       }),
@@ -1666,88 +1678,260 @@ export function buildEnemy3D(enemy: EnemyUnit): EnemyRig {
 
     const warhead = new THREE.Mesh(
       getSharedGeo('en_bm_w', () => {
-        const g = new THREE.ConeGeometry(0.36, 1.25, 8);
+        const g = new THREE.ConeGeometry(0.32, 1.15, 8);
         g.rotateX(Math.PI / 2);
         return g;
       }),
       getArmorMat(0xfef08a, 0.28, 0.45)
     );
-    warhead.position.z = 2.4;
+    warhead.position.z = 2.25;
     group.add(warhead);
 
-    const finH = new THREE.Mesh(getSharedGeo('en_bm_fh', () => new THREE.BoxGeometry(1.6, 0.08, 0.75)), darkMat);
-    finH.position.z = -1.3;
+    const finH = new THREE.Mesh(getSharedGeo('en_bm_fh', () => new THREE.BoxGeometry(1.42, 0.08, 0.72)), darkMat);
+    finH.position.z = -1.25;
     group.add(finH);
-    const finV = new THREE.Mesh(getSharedGeo('en_bm_fv', () => new THREE.BoxGeometry(0.08, 1.6, 0.75)), darkMat);
-    finV.position.z = -1.3;
+    const finV = new THREE.Mesh(getSharedGeo('en_bm_fv', () => new THREE.BoxGeometry(0.08, 1.42, 0.72)), darkMat);
+    finV.position.z = -1.25;
     group.add(finV);
 
     const plume = new THREE.Mesh(
       getSharedGeo('en_bm_plume', () => {
-        const g = new THREE.ConeGeometry(0.38, 1.9, 6);
+        const g = new THREE.ConeGeometry(0.32, 1.6, 6);
         g.rotateX(-Math.PI / 2);
         return g;
       }),
       getBasicGlowMat(0xff7b00)
     );
-    plume.position.z = -2.7;
+    plume.position.z = -2.45;
     group.add(plume);
     flamePlumes.push(plume);
   } else if (enemy.shape === 'sky_dreadnought') {
-    const armorMat = getArmorMat(0x1b2330, 0.34, 0.72);
-    const trimMat = getArmorMat(0x991b1b, 0.38, 0.48);
+    // Realistic 4-Engine Swept-Wing Strategic Heavy Command Bomber (Tu-160 / B-52H style)
+    const armorMat = getArmorMat(0x283240, 0.42, 0.58);
+    const accentMat = getArmorMat(0x881337, 0.44, 0.42);
+    const radomeMat = getArmorMat(0xe2e8f0, 0.35, 0.2);
 
-    const centerHull = new THREE.Mesh(getSharedGeo('en_dr_h', () => new THREE.BoxGeometry(2.7, 1.45, 6.6)), armorMat);
+    const centerHull = new THREE.Mesh(
+      getSharedGeo('en_sb_fus', () => {
+        const g = new THREE.CylinderGeometry(0.68, 0.82, 6.2, 10);
+        g.rotateX(Math.PI / 2);
+        return g;
+      }),
+      armorMat
+    );
     centerHull.castShadow = true;
     group.add(centerHull);
 
-    const mainWing = new THREE.Mesh(getSharedGeo('en_dr_w', () => new THREE.BoxGeometry(10.2, 0.42, 2.7)), armorMat);
-    mainWing.position.set(0, 0.2, 0.2);
+    const noseCone = new THREE.Mesh(
+      getSharedGeo('en_sb_nose', () => {
+        const g = new THREE.ConeGeometry(0.68, 1.9, 10);
+        g.rotateX(Math.PI / 2);
+        return g;
+      }),
+      darkMat
+    );
+    noseCone.position.z = 4.02;
+    group.add(noseCone);
+
+    const cockpit = new THREE.Mesh(
+      getSharedGeo('en_sb_cock', () => new THREE.BoxGeometry(0.76, 0.28, 1.05)),
+      getGlowMat(0xf59e0b, 1.25)
+    );
+    cockpit.position.set(0, 0.56, 2.35);
+    group.add(cockpit);
+
+    // Swept strategic main wings
+    const mainWing = new THREE.Mesh(
+      getSharedGeo('en_sb_wing', () => {
+        const s = new THREE.Shape();
+        s.moveTo(0, 1.25);
+        s.lineTo(4.75, -0.95);
+        s.lineTo(4.45, -1.65);
+        s.lineTo(0.85, -0.65);
+        s.lineTo(-0.85, -0.65);
+        s.lineTo(-4.45, -1.65);
+        s.lineTo(-4.75, -0.95);
+        s.closePath();
+        const g = new THREE.ExtrudeGeometry(s, { depth: 0.24, bevelEnabled: false });
+        g.rotateX(Math.PI / 2);
+        return g;
+      }),
+      armorMat
+    );
+    mainWing.position.set(0, 0.16, 0.35);
     mainWing.castShadow = true;
     group.add(mainWing);
 
-    const boomGeo = getSharedGeo('en_dr_bm', () => {
-      const g = new THREE.CylinderGeometry(0.58, 0.65, 4.6, 8);
+    // 4 Heavy Turbofan Engine Nacelles + Warm Afterburners
+    const nacGeo = getSharedGeo('en_sb_nac', () => {
+      const g = new THREE.CylinderGeometry(0.28, 0.32, 2.1, 8);
       g.rotateX(Math.PI / 2);
       return g;
     });
-    const thrustGeo = getSharedGeo('en_dr_th', () => {
-      const g = new THREE.ConeGeometry(0.48, 2.2, 6);
+    const thrustGeo = getSharedGeo('en_sb_th', () => {
+      const g = new THREE.ConeGeometry(0.24, 1.4, 6);
       g.rotateX(-Math.PI / 2);
       return g;
     });
-    const thrustMat = getBasicGlowMat(0xff5500);
+    const thrustMat = getBasicGlowMat(0xff6b00);
 
-    for (const sx of [-3.55, 3.55]) {
-      const boom = new THREE.Mesh(boomGeo, trimMat);
-      boom.position.set(sx, -0.1, -0.3);
-      group.add(boom);
+    for (const [sx, sz] of [
+      [-1.45, -0.15],
+      [1.45, -0.15],
+      [-2.85, -0.68],
+      [2.85, -0.68],
+    ]) {
+      const nac = new THREE.Mesh(nacGeo, darkMat);
+      nac.position.set(sx, -0.22, sz);
+      group.add(nac);
 
       const thruster = new THREE.Mesh(thrustGeo, thrustMat);
-      thruster.position.set(sx, -0.1, -3.5);
+      thruster.position.set(sx, -0.22, sz - 1.65);
       group.add(thruster);
       flamePlumes.push(thruster);
     }
 
-    const bridge = new THREE.Mesh(getSharedGeo('en_dr_br', () => new THREE.BoxGeometry(1.5, 0.72, 2.0)), trimMat);
-    bridge.position.set(0, 1.0, 1.15);
-    group.add(bridge);
-
-    const visor = new THREE.Mesh(
-      getSharedGeo('en_dr_vs', () => new THREE.BoxGeometry(1.3, 0.26, 0.14)),
-      getGlowMat(0xf43f5e, 2.0)
+    // Swept tailplane + tall strategic vertical stabilizer
+    const tailPlane = new THREE.Mesh(
+      getSharedGeo('en_sb_tp', () => new THREE.BoxGeometry(3.2, 0.14, 0.95)),
+      armorMat
     );
-    visor.position.set(0, 1.04, 2.18);
-    group.add(visor);
+    tailPlane.position.set(0, 0.25, -2.75);
+    group.add(tailPlane);
+
+    const vTail = new THREE.Mesh(
+      getSharedGeo('en_sb_vt', () => new THREE.BoxGeometry(0.2, 1.85, 1.35)),
+      accentMat
+    );
+    vTail.position.set(0, 1.15, -2.65);
+    group.add(vTail);
+
+    // Dorsal Command AWACS Radome
+    const awacsMount = new THREE.Mesh(
+      getSharedGeo('en_sb_am', () => new THREE.BoxGeometry(0.24, 0.55, 0.52)),
+      darkMat
+    );
+    awacsMount.position.set(0, 0.92, -0.65);
+    group.add(awacsMount);
+
+    const awacsDish = new THREE.Mesh(
+      getSharedGeo('en_sb_ad', () => new THREE.CylinderGeometry(1.15, 1.15, 0.22, 14)),
+      radomeMat
+    );
+    awacsDish.position.set(0, 1.24, -0.65);
+    group.add(awacsDish);
 
     const jamRing = new THREE.Mesh(
-      getSharedGeo('en_dr_jr', () => new THREE.TorusGeometry(2.8, 0.08, 5, 20)),
-      getBasicGlowMat(0xa855f7, 0.5)
+      getSharedGeo('en_dr_jr', () => new THREE.TorusGeometry(2.15, 0.055, 5, 20)),
+      getBasicGlowMat(0x818cf8, 0.36)
     );
     jamRing.rotation.x = Math.PI / 2;
-    jamRing.position.y = -0.5;
+    jamRing.position.y = -0.45;
     group.add(jamRing);
     orbitRings.push(jamRing);
+  } else if (enemy.shape === 'b2_spirit') {
+    // Authentic Northrop B-2 Spirit Stealth Flying-Wing Strategic Bomber (Sawtooth W-Trailing Edge)
+    const ramMat = getArmorMat(0x1f242d, 0.72, 0.24); // Matte charcoal Radar-Absorbent Material
+    const panelMat = getArmorMat(0x2d3542, 0.58, 0.35);
+    const cockpitGlassMat = getGlowMat(0x94a3b8, 0.55);
+    const intakeMat = getGunmetalMat(0x111419, 0.4, 0.78);
+    const exhaustGlowMat = getBasicGlowMat(0xf97316, 0.85);
+
+    // 1. Primary Iconic Sawtooth Flying-Wing Planform
+    const flyingWingGeo = getSharedGeo('en_b2_wing', () => {
+      const s = new THREE.Shape();
+      // Nose apex at +Z (in shape Y before rotateX(PI/2))
+      s.moveTo(0, 2.55);
+      // Swept leading edge to starboard wingtip
+      s.lineTo(5.35, -0.58);
+      s.lineTo(4.92, -1.25);
+      // Iconic B-2 W-shaped sawtooth trailing edge
+      s.lineTo(2.95, -0.35);
+      s.lineTo(1.72, -1.42);
+      s.lineTo(0.0, -0.62);
+      s.lineTo(-1.72, -1.42);
+      s.lineTo(-2.95, -0.35);
+      s.lineTo(-4.92, -1.25);
+      // Swept leading edge from port wingtip back to nose
+      s.lineTo(-5.35, -0.58);
+      s.closePath();
+
+      const g = new THREE.ExtrudeGeometry(s, {
+        depth: 0.24,
+        bevelEnabled: true,
+        bevelSegments: 1,
+        steps: 1,
+        bevelSize: 0.08,
+        bevelThickness: 0.06,
+      });
+      g.center();
+      g.rotateX(Math.PI / 2);
+      return g;
+    });
+    const wingBody = new THREE.Mesh(flyingWingGeo, ramMat);
+    wingBody.castShadow = true;
+    group.add(wingBody);
+
+    // 2. Blended Dorsal Center Fuselage Spine (raises smoothly along centerline)
+    const centerSpine = new THREE.Mesh(
+      getSharedGeo('en_b2_spine', () => {
+        const g = new THREE.CylinderGeometry(0.42, 0.92, 2.75, 6);
+        g.rotateX(Math.PI / 2);
+        g.scale(1.45, 0.45, 1.0);
+        return g;
+      }),
+      panelMat
+    );
+    centerSpine.position.set(0, 0.22, 0.42);
+    group.add(centerSpine);
+
+    // 3. Recessed Panoramic 4-Pane Stealth Cockpit Canopy
+    const canopy = new THREE.Mesh(
+      getSharedGeo('en_b2_canopy', () => new THREE.BoxGeometry(0.92, 0.16, 0.72)),
+      cockpitGlassMat
+    );
+    canopy.position.set(0, 0.34, 1.28);
+    canopy.rotation.x = 0.22;
+    group.add(canopy);
+
+    // 4. Twin Serrated Dorsal S-Duct Engine Intakes + Recessed Over-Wing Exhaust Troughs
+    const intakeGeo = getSharedGeo('en_b2_in', () => new THREE.BoxGeometry(0.68, 0.26, 1.85));
+    const exhaustGeo = getSharedGeo('en_b2_ex', () => new THREE.BoxGeometry(0.54, 0.08, 0.48));
+    for (const sx of [-1.08, 1.08]) {
+      const intake = new THREE.Mesh(intakeGeo, panelMat);
+      intake.position.set(sx, 0.24, 0.18);
+      group.add(intake);
+
+      const scoop = new THREE.Mesh(
+        getSharedGeo('en_b2_scoop', () => new THREE.BoxGeometry(0.56, 0.18, 0.12)),
+        intakeMat
+      );
+      scoop.position.set(sx, 0.24, 1.12);
+      group.add(scoop);
+
+      // Shielded low-observable exhaust trough on upper trailing deck
+      const exhaust = new THREE.Mesh(exhaustGeo, exhaustGlowMat);
+      exhaust.position.set(sx, 0.19, -0.82);
+      group.add(exhaust);
+      flamePlumes.push(exhaust);
+    }
+
+    // 5. Underbelly Rotary Bomb-Bay Doors (visible when flying overhead)
+    const bombBay = new THREE.Mesh(
+      getSharedGeo('en_b2_bay', () => new THREE.BoxGeometry(1.55, 0.1, 1.65)),
+      intakeMat
+    );
+    bombBay.position.set(0, -0.18, 0.12);
+    group.add(bombBay);
+
+    // 6. Subtle Formation Wingtip Marker Lights
+    const tipGeo = getSharedGeo('en_b2_tip', () => new THREE.SphereGeometry(0.11, 5, 5));
+    const portLight = new THREE.Mesh(tipGeo, getBasicGlowMat(0xf43f5e));
+    portLight.position.set(-5.15, 0.06, -0.78);
+    group.add(portLight);
+    const stbdLight = new THREE.Mesh(tipGeo, getBasicGlowMat(0xf43f5e));
+    stbdLight.position.set(5.15, 0.06, -0.78);
+    group.add(stbdLight);
   } else if (enemy.shape === 'enemy_fighter') {
     // Sleek crimson-and-charcoal twin-tail enemy interceptor jet mirroring allied CAP fighters
     const hullMat = getArmorMat(0x272a36, 0.34, 0.68);
@@ -1933,26 +2117,42 @@ export function buildEnemy3D(enemy: EnemyUnit): EnemyRig {
     group.add(navGlow);
   }
 
-  const healthBar = createHealthBarBillboard(enemy.hp, Boolean(enemy.isBoss));
+  const hpBarClass: 'small' | 'medium' | 'boss' = enemy.isBoss
+    ? 'boss'
+    : enemy.shape === 'loiter_pod' ||
+        enemy.shape === 'delta_wing' ||
+        enemy.shape === 'swept_drone' ||
+        enemy.shape === 'scout_hex'
+      ? 'small'
+      : 'medium';
+  const healthBar = createHealthBarBillboard(enemy.hp, hpBarClass);
   group.add(healthBar.mesh);
 
-  // Calibrated natural military proportions from micro-drone up to Sky Dreadnought
+  // Calibrated realistic military proportions relative to HQ bunker & defense towers
   const enemyScale =
-    enemy.shape === 'sky_dreadnought'
-      ? 0.7
-      : enemy.shape === 'heavy_bomber'
-        ? 0.74
-        : enemy.shape === 'enemy_fighter'
-          ? 0.84
-          : enemy.shape === 'cruise_missile' || enemy.shape === 'ballistic_missile'
-            ? 0.74
-            : enemy.shape === 'loiter_pod'
-              ? 0.72
-              : enemy.id === 'arash_long_range' || enemy.id === 'reaper_hunter'
-                ? 0.9
-                : enemy.shape === 'stealth_wing'
-                  ? 0.82
-                  : 0.78;
+    enemy.shape === 'b2_spirit'
+      ? 0.62
+      : enemy.shape === 'sky_dreadnought'
+        ? 0.56
+        : enemy.shape === 'heavy_bomber'
+          ? 0.56
+          : enemy.shape === 'enemy_fighter'
+            ? 0.62
+            : enemy.shape === 'jammer_orb'
+              ? 0.56
+              : enemy.shape === 'stealth_wing'
+                ? 0.54
+                : enemy.shape === 'ballistic_missile'
+                  ? 0.52
+                  : enemy.shape === 'cruise_missile'
+                    ? 0.48
+                    : enemy.shape === 'loiter_pod'
+                      ? 0.38
+                      : enemy.id === 'arash_long_range' || enemy.id === 'reaper_hunter'
+                        ? 0.54
+                        : enemy.shape === 'delta_wing'
+                          ? 0.46
+                          : 0.48;
   group.scale.setScalar(enemyScale);
   healthBar.mesh.scale.setScalar(1 / enemyScale);
 
@@ -2291,8 +2491,8 @@ export function buildAllyFighter3D(): AllyFighterRig {
     pylons.push(pylon);
   }
 
-  // Natural balanced military scale
-  group.scale.setScalar(0.86);
+  // Realistic military scale matching enemy interceptor jets & defense towers
+  group.scale.setScalar(0.64);
 
   const updateAnim = (_dt: number, timeSec: number) => {
     const pulse = 0.86 + 0.24 * Math.sin(timeSec * 36.0);
@@ -2302,4 +2502,250 @@ export function buildAllyFighter3D(): AllyFighterRig {
   };
 
   return { group, pylons, updateAnim };
+}
+
+export interface SecondaryFacilityRig {
+  group: THREE.Group;
+  intactGroup: THREE.Group;
+  ruinedGroup: THREE.Group;
+  healthBar: { mesh: THREE.Object3D; updateHp: (current: number, maxOverride?: number) => void };
+  setDestroyed: () => void;
+  updateAnim: (timeSec: number, cameraQuat?: THREE.Quaternion) => void;
+}
+
+/**
+ * Builds destructible secondary base structures for special & hard defense missions:
+ * - 'ammo_bunker': Reinforced concrete arched munitions/command bunker with blast door & hessco walls
+ * - 'fuel_depot': Twin armored horizontal cylindrical fuel tanks + piping manifold & power substation
+ */
+export function buildSecondaryFacility3D(kind: FacilityKind, maxHp: number): SecondaryFacilityRig {
+  const group = new THREE.Group();
+  const intactGroup = new THREE.Group();
+  const ruinedGroup = new THREE.Group();
+  ruinedGroup.visible = false;
+  group.add(intactGroup);
+  group.add(ruinedGroup);
+
+  const concreteMat = getArmorMat(0x475569, 0.82, 0.14);
+  const darkConcreteMat = getArmorMat(0x334155, 0.84, 0.16);
+  const steelMat = getGunmetalMat(0x1e293b, 0.42, 0.72);
+  const sandbagMat = getArmorMat(0x7c6f5b, 0.88, 0.08);
+  const hazardMat = getArmorMat(0xd97706, 0.54, 0.25);
+  const charredMat = getArmorMat(0x16181d, 0.92, 0.12);
+  const emberMat = getGlowMat(0xf97316, 1.35);
+
+  // Grounded concrete foundation apron shared between intact & ruined states
+  const apron = new THREE.Mesh(
+    getSharedGeo('fac_apron', () => new THREE.BoxGeometry(4.4, 0.24, 3.8)),
+    darkConcreteMat
+  );
+  apron.position.y = 0.12;
+  apron.receiveShadow = true;
+  group.add(apron);
+
+  let beaconMat: THREE.MeshStandardMaterial | null = null;
+
+  if (kind === 'ammo_bunker') {
+    // 1. Reinforced half-cylinder concrete arch roof
+    const arch = new THREE.Mesh(
+      getSharedGeo('fac_bk_arch', () => {
+        const g = new THREE.CylinderGeometry(1.38, 1.48, 2.95, 10, 1, false, 0, Math.PI);
+        g.rotateZ(Math.PI / 2);
+        g.rotateY(Math.PI / 2);
+        return g;
+      }),
+      concreteMat
+    );
+    arch.position.set(0, 0.24, 0);
+    arch.castShadow = true;
+    arch.receiveShadow = true;
+    intactGroup.add(arch);
+
+    // 2. Front & rear armored concrete bulkheads
+    const bulkhead = new THREE.Mesh(
+      getSharedGeo('fac_bk_wall', () => new THREE.BoxGeometry(2.72, 1.36, 2.7)),
+      darkConcreteMat
+    );
+    bulkhead.position.set(0, 0.92, 0);
+    bulkhead.castShadow = true;
+    intactGroup.add(bulkhead);
+
+    // 3. Recessed heavy steel blast door + amber hazard lintel
+    const door = new THREE.Mesh(
+      getSharedGeo('fac_bk_door', () => new THREE.BoxGeometry(1.18, 0.94, 0.18)),
+      steelMat
+    );
+    door.position.set(0, 0.72, 1.38);
+    intactGroup.add(door);
+
+    const lintel = new THREE.Mesh(
+      getSharedGeo('fac_bk_lin', () => new THREE.BoxGeometry(1.48, 0.16, 0.22)),
+      hazardMat
+    );
+    lintel.position.set(0, 1.24, 1.38);
+    intactGroup.add(lintel);
+
+    // 4. Perimeter protective Hesco / sandbag blast walls
+    const wallGeo = getSharedGeo('fac_bk_sb', () => new THREE.BoxGeometry(0.42, 0.56, 2.85));
+    for (const sx of [-1.86, 1.86]) {
+      const sb = new THREE.Mesh(wallGeo, sandbagMat);
+      sb.position.set(sx, 0.52, 0);
+      sb.castShadow = true;
+      intactGroup.add(sb);
+    }
+
+    // 5. Roof armored vent hood & status beacon
+    const vent = new THREE.Mesh(
+      getSharedGeo('fac_bk_vent', () => new THREE.BoxGeometry(0.68, 0.34, 0.68)),
+      steelMat
+    );
+    vent.position.set(-0.55, 1.76, -0.35);
+    intactGroup.add(vent);
+
+    beaconMat = new THREE.MeshStandardMaterial({
+      color: 0x34d399,
+      emissive: 0x10b981,
+      emissiveIntensity: 1.5,
+      roughness: 0.25,
+      metalness: 0.15,
+    });
+    const beacon = new THREE.Mesh(getSharedGeo('fac_beac', () => new THREE.SphereGeometry(0.14, 6, 6)), beaconMat);
+    beacon.position.set(0.75, 1.82, 0.65);
+    intactGroup.add(beacon);
+
+    // Ruined Bunker Sub-group
+    const collapsedLeft = new THREE.Mesh(
+      getSharedGeo('fac_bk_r1', () => new THREE.BoxGeometry(1.25, 0.72, 2.3)),
+      charredMat
+    );
+    collapsedLeft.position.set(-0.82, 0.52, 0.05);
+    collapsedLeft.rotation.z = 0.28;
+    ruinedGroup.add(collapsedLeft);
+
+    const collapsedRight = new THREE.Mesh(
+      getSharedGeo('fac_bk_r2', () => new THREE.BoxGeometry(1.15, 0.58, 2.1)),
+      charredMat
+    );
+    collapsedRight.position.set(0.78, 0.44, -0.1);
+    collapsedRight.rotation.z = -0.34;
+    ruinedGroup.add(collapsedRight);
+
+    const emberCore = new THREE.Mesh(
+      getSharedGeo('fac_ember', () => new THREE.CylinderGeometry(0.72, 0.95, 0.14, 8)),
+      emberMat
+    );
+    emberCore.position.set(0, 0.28, 0);
+    ruinedGroup.add(emberCore);
+  } else {
+    // FUEL & POWER DEPOT
+    const tankMat = getArmorMat(0x94a3b8, 0.42, 0.56);
+    const redStripeMat = getArmorMat(0xdc2626, 0.48, 0.28);
+
+    // 1. Twin Horizontal Pressurized Fuel Tanks on Concrete Saddles
+    const tankGeo = getSharedGeo('fac_fl_tank', () => {
+      const g = new THREE.CylinderGeometry(0.62, 0.62, 2.85, 12);
+      g.rotateZ(Math.PI / 2);
+      return g;
+    });
+    const stripeGeo = getSharedGeo('fac_fl_str', () => {
+      const g = new THREE.CylinderGeometry(0.64, 0.64, 0.26, 12);
+      g.rotateZ(Math.PI / 2);
+      return g;
+    });
+    const saddleGeo = getSharedGeo('fac_fl_sad', () => new THREE.BoxGeometry(0.28, 0.52, 1.05));
+
+    for (const sz of [-0.72, 0.72]) {
+      const tank = new THREE.Mesh(tankGeo, tankMat);
+      tank.position.set(-0.22, 1.02, sz);
+      tank.castShadow = true;
+      tank.receiveShadow = true;
+      intactGroup.add(tank);
+
+      const stripe = new THREE.Mesh(stripeGeo, redStripeMat);
+      stripe.position.set(-0.22, 1.02, sz);
+      intactGroup.add(stripe);
+
+      for (const sx of [-1.05, 0.62]) {
+        const saddle = new THREE.Mesh(saddleGeo, concreteMat);
+        saddle.position.set(sx, 0.48, sz);
+        intactGroup.add(saddle);
+      }
+    }
+
+    // 2. Overhead Steel Manifold Piping
+    const pipe = new THREE.Mesh(
+      getSharedGeo('fac_fl_pipe', () => {
+        const g = new THREE.CylinderGeometry(0.11, 0.11, 1.65, 6);
+        g.rotateX(Math.PI / 2);
+        return g;
+      }),
+      hazardMat
+    );
+    pipe.position.set(-0.22, 1.72, 0);
+    intactGroup.add(pipe);
+
+    // 3. Armored Power Transformer Cabinet on East End
+    const xfmr = new THREE.Mesh(
+      getSharedGeo('fac_fl_xf', () => new THREE.BoxGeometry(0.86, 1.32, 1.88)),
+      steelMat
+    );
+    xfmr.position.set(1.48, 0.9, 0);
+    xfmr.castShadow = true;
+    intactGroup.add(xfmr);
+
+    beaconMat = new THREE.MeshStandardMaterial({
+      color: 0xf59e0b,
+      emissive: 0xf59e0b,
+      emissiveIntensity: 1.5,
+      roughness: 0.25,
+      metalness: 0.15,
+    });
+    const beacon = new THREE.Mesh(getSharedGeo('fac_beac', () => new THREE.SphereGeometry(0.14, 6, 6)), beaconMat);
+    beacon.position.set(1.48, 1.72, 0);
+    intactGroup.add(beacon);
+
+    // Ruined Fuel Depot Sub-group
+    const scorchedTank = new THREE.Mesh(
+      getSharedGeo('fac_fl_rt', () => {
+        const g = new THREE.CylinderGeometry(0.56, 0.52, 2.2, 8);
+        g.rotateZ(Math.PI / 2);
+        return g;
+      }),
+      charredMat
+    );
+    scorchedTank.position.set(-0.25, 0.56, 0.32);
+    scorchedTank.rotation.y = 0.24;
+    scorchedTank.rotation.z = -0.18;
+    ruinedGroup.add(scorchedTank);
+
+    const emberCore = new THREE.Mesh(
+      getSharedGeo('fac_ember', () => new THREE.CylinderGeometry(0.72, 0.95, 0.14, 8)),
+      emberMat
+    );
+    emberCore.position.set(0.1, 0.28, -0.25);
+    ruinedGroup.add(emberCore);
+  }
+
+  const healthBar = createHealthBarBillboard(maxHp, 'medium');
+  healthBar.mesh.position.y = 2.65;
+  group.add(healthBar.mesh);
+
+  let destroyed = false;
+  const setDestroyed = () => {
+    destroyed = true;
+    intactGroup.visible = false;
+    ruinedGroup.visible = true;
+    healthBar.mesh.visible = false;
+  };
+
+  const updateAnim = (timeSec: number, cameraQuat?: THREE.Quaternion) => {
+    if (!destroyed && beaconMat) {
+      beaconMat.emissiveIntensity = 1.0 + 0.85 * (0.5 + 0.5 * Math.sin(timeSec * 3.8));
+    }
+    if (!destroyed && cameraQuat) {
+      healthBar.mesh.quaternion.copy(cameraQuat);
+    }
+  };
+
+  return { group, intactGroup, ruinedGroup, healthBar, setDestroyed, updateAnim };
 }

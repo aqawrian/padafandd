@@ -420,6 +420,8 @@ function createBasePadTexture(biome: MapBiome): THREE.CanvasTexture {
 function buildTwilightSky(cfg: BiomeConfig): {
   group: THREE.Group;
   cloudRing: THREE.Group;
+  cloudMat: THREE.MeshStandardMaterial;
+  cloudDayColor: THREE.Color;
   skyMat: THREE.MeshBasicMaterial;
   starMat: THREE.PointsMaterial;
   haloMat: THREE.MeshBasicMaterial;
@@ -594,6 +596,8 @@ function buildTwilightSky(cfg: BiomeConfig): {
   return {
     group: skyGroup,
     cloudRing,
+    cloudMat,
+    cloudDayColor: new THREE.Color(cloudColor),
     skyMat,
     starMat,
     haloMat: halo.material as THREE.MeshBasicMaterial,
@@ -2087,24 +2091,31 @@ export function buildBiomeWorld(biome: MapBiome): BiomeWorldHandle {
   const weather = buildBiomeWeather(biome);
   group.add(weather.points);
 
-  // 8. Warm Central Command Point Light
-  const baseGlow = new THREE.PointLight(0xffb454, 17, 28, 1.8);
-  baseGlow.position.set(0, 4.5, 0);
+  // 8. Warm Central Command Point Light (brightens dramatically during Night Operations)
+  const baseGlow = new THREE.PointLight(0xffb454, 15, 38, 1.6);
+  baseGlow.position.set(0, 4.8, 0);
   group.add(baseGlow);
 
   const allBlinking = [...baseStructs.blinkingBeacons, ...landmarks.blinkingMats];
+  const _cloudNightColor = new THREE.Color(0x060b16);
 
   const update = (timeSec: number, dt: number, nightFactor = 0, searchTargets?: SearchlightTargetPoint[]) => {
     const nf = Math.max(0, Math.min(1, nightFactor));
 
-    // Smoothly shift sky dome darkness, star brilliance, moon halo, and searchlight beam glow during Night Raids
-    const skyTint = 1.0 - nf * 0.56;
-    sky.skyMat.color.setRGB(skyTint * (1 - nf * 0.14), skyTint * (1 - nf * 0.06), skyTint);
-    sky.starMat.opacity = 0.72 + nf * 0.28;
-    sky.starMat.size = 1.05 + nf * 0.48;
-    sky.haloMat.opacity = 0.14 + nf * 0.16;
-    baseGlow.intensity = 17 + nf * 10;
-    searchlightBeamMat.opacity = 0.22 + nf * 0.42;
+    // True Night Operations atmosphere: deep midnight sky dome, dark clouds, luminous stars/moon, vivid AA searchlights
+    const skyTint = 1.0 - nf * 0.84;
+    sky.skyMat.color.setRGB(
+      Math.max(0.04, skyTint * (1 - nf * 0.35)),
+      Math.max(0.06, skyTint * (1 - nf * 0.2)),
+      Math.max(0.11, skyTint)
+    );
+    sky.cloudMat.color.copy(sky.cloudDayColor).lerp(_cloudNightColor, nf * 0.9);
+    sky.cloudMat.opacity = 0.52 - nf * 0.16;
+    sky.starMat.opacity = 0.65 + nf * 0.35;
+    sky.starMat.size = 1.05 + nf * 0.72;
+    sky.haloMat.opacity = 0.12 + nf * 0.32;
+    baseGlow.intensity = 15 + nf * 26;
+    searchlightBeamMat.opacity = 0.14 + nf * 0.64;
 
     // Slowly drift Low-Poly twilight cloud ring & shimmer polar aurora ribbons
     sky.cloudRing.rotation.y += dt * 0.012;
