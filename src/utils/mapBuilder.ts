@@ -101,11 +101,126 @@ export interface SearchlightTargetPoint {
   z: number;
 }
 
+export interface HighGroundPad {
+  id: string;
+  x: number;
+  z: number;
+  elevation: number;
+  radius: number;
+}
+
+export interface ConvoyTruckRig {
+  group: THREE.Group;
+  updateAnim: (dt: number, timeSec: number, speed: number, nightFactor: number) => void;
+}
+
 export interface BiomeWorldHandle {
   group: THREE.Group;
   terrainMesh: THREE.Mesh;
-  update: (timeSec: number, dt: number, nightFactor?: number, searchTargets?: SearchlightTargetPoint[]) => void;
+  update: (
+    timeSec: number,
+    dt: number,
+    nightFactor?: number,
+    searchTargets?: SearchlightTargetPoint[],
+    alertLevel?: number
+  ) => void;
   dispose: () => void;
+}
+
+const HIGH_GROUND_PADS_BY_BIOME: Record<MapBiome, HighGroundPad[]> = {
+  alpine: [
+    { id: 'hg_nw', x: -26, z: -14, elevation: 2.6, radius: 3.0 },
+    { id: 'hg_ne', x: 26, z: -14, elevation: 2.6, radius: 3.0 },
+    { id: 'hg_sw', x: -26, z: 10, elevation: 2.6, radius: 3.0 },
+    { id: 'hg_se', x: 26, z: 10, elevation: 2.6, radius: 3.0 },
+  ],
+  coastal: [
+    { id: 'hg_nw', x: -26, z: -14, elevation: 2.6, radius: 3.0 },
+    { id: 'hg_ne', x: 12, z: -26, elevation: 2.6, radius: 3.0 },
+    { id: 'hg_sw', x: -28, z: 14, elevation: 2.6, radius: 3.0 },
+    { id: 'hg_se', x: -10, z: 26, elevation: 2.6, radius: 3.0 },
+  ],
+  desert: [
+    { id: 'hg_nw', x: -28, z: -22, elevation: 2.6, radius: 3.0 },
+    { id: 'hg_ne', x: 28, z: -22, elevation: 2.6, radius: 3.0 },
+    { id: 'hg_sw', x: -28, z: 16, elevation: 2.6, radius: 3.0 },
+    { id: 'hg_se', x: 26, z: 18, elevation: 2.6, radius: 3.0 },
+  ],
+  arctic: [
+    { id: 'hg_nw', x: -28, z: -22, elevation: 2.6, radius: 3.0 },
+    { id: 'hg_ne', x: 24, z: -24, elevation: 2.6, radius: 3.0 },
+    { id: 'hg_sw', x: -28, z: 16, elevation: 2.6, radius: 3.0 },
+    { id: 'hg_se', x: 4, z: 28, elevation: 2.6, radius: 3.0 },
+  ],
+};
+
+const CONVOY_WAYPOINTS_BY_BIOME: Record<MapBiome, { x: number; z: number }[]> = {
+  alpine: [
+    { x: -2.0, z: 54.0 },
+    { x: -2.0, z: 36.0 },
+    { x: -2.0, z: 20.5 },
+    { x: -2.0, z: 13.5 },
+    { x: -2.0, z: 10.4 },
+  ],
+  coastal: [
+    { x: -54.0, z: -4.0 },
+    { x: -36.0, z: -4.0 },
+    { x: -22.0, z: -2.0 },
+    { x: -14.5, z: -0.5 },
+    { x: -10.6, z: 0.0 },
+  ],
+  desert: [
+    { x: 0.0, z: 54.0 },
+    { x: 3.5, z: 38.0 },
+    { x: 2.0, z: 24.0 },
+    { x: 0.0, z: 14.5 },
+    { x: 0.0, z: 10.6 },
+  ],
+  arctic: [
+    { x: -46.0, z: 34.0 },
+    { x: -32.0, z: 23.0 },
+    { x: -20.0, z: 14.0 },
+    { x: -13.0, z: 9.0 },
+    { x: -9.8, z: 6.2 },
+  ],
+};
+
+export function getHighGroundPads(biome: MapBiome): HighGroundPad[] {
+  return HIGH_GROUND_PADS_BY_BIOME[biome];
+}
+
+export function findHighGroundPad(x: number, z: number, biome: MapBiome, tolerance = 2.8): HighGroundPad | null {
+  const pads = HIGH_GROUND_PADS_BY_BIOME[biome];
+  for (let i = 0; i < pads.length; i++) {
+    const p = pads[i];
+    if (Math.hypot(x - p.x, z - p.z) <= tolerance) {
+      return p;
+    }
+  }
+  return null;
+}
+
+export function getConvoyWaypoints(biome: MapBiome): { x: number; z: number }[] {
+  return CONVOY_WAYPOINTS_BY_BIOME[biome];
+}
+
+function distanceToPolyline(x: number, z: number, pts: { x: number; z: number }[]): number {
+  let minD = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const ax = pts[i].x;
+    const az = pts[i].z;
+    const bx = pts[i + 1].x;
+    const bz = pts[i + 1].z;
+    const abx = bx - ax;
+    const abz = bz - az;
+    const abLenSq = abx * abx + abz * abz;
+    const t = abLenSq > 0.0001 ? Math.max(0, Math.min(1, ((x - ax) * abx + (z - az) * abz) / abLenSq)) : 0;
+    const px = ax + abx * t;
+    const pz = az + abz * t;
+    const d = Math.hypot(x - px, z - pz);
+    if (d < minD) minD = d;
+  }
+  return minD;
 }
 
 // Reusable zero-GC scratch objects for active AA searchlight target tracking
@@ -159,20 +274,21 @@ function riverCenterZ(x: number): number {
 
 /**
  * Deterministic ground elevation at (x, z) for each biome.
- * Central military plateau stays cleanly flat at y = 0 for crisp tower placement.
+ * Expanded tactical defense basin (~30% wider) + 4 sculpted elevated High-Ground Strategic Pads per biome!
  */
 export function getGroundHeight(x: number, z: number, biome: MapBiome): number {
   const r = Math.hypot(x, z);
+  let h = 0;
 
   if (biome === 'alpine') {
-    const plateauBlend = smoothstep(13.5, 22.0, r);
-    const n1 = fbm2D(x * 0.035 + 3.1, z * 0.035 - 1.7, 3);
-    const n2 = fbm2D(x * 0.08 - 5.2, z * 0.08 + 4.4, 2);
+    const plateauBlend = smoothstep(20.5, 32.0, r);
+    const n1 = fbm2D(x * 0.03 + 3.1, z * 0.03 - 1.7, 3);
+    const n2 = fbm2D(x * 0.075 - 5.2, z * 0.075 + 4.4, 2);
 
-    const mountainRing = smoothstep(23, 62, r) * (16.5 + n1 * 9.8 + Math.abs(n2) * 5.2);
-    const rollingHills = plateauBlend * (n1 * 2.6 + n2 * 0.9);
+    const mountainRing = smoothstep(36, 84, r) * (18.5 + n1 * 10.5 + Math.abs(n2) * 5.6);
+    const rollingHills = plateauBlend * (n1 * 2.2 + n2 * 0.8);
 
-    let h = rollingHills + mountainRing;
+    h = rollingHills + mountainRing;
 
     const rz = riverCenterZ(x);
     const distRiver = Math.abs(z - rz);
@@ -181,106 +297,130 @@ export function getGroundHeight(x: number, z: number, biome: MapBiome): number {
     h = h * (1 - riverMask * 0.85 * bridgeClear) - riverMask * 2.35 * bridgeClear;
 
     const roadDist = Math.abs(x + 2.0);
-    if (z > 8 && z < 44 && roadDist < 4.5) {
-      const roadFlatten = 1 - smoothstep(1.8, 4.5, roadDist);
+    if (z > 8 && z < 60 && roadDist < 4.8) {
+      const roadFlatten = 1 - smoothstep(2.0, 4.8, roadDist);
       if (distRiver > 4.2) {
-        h *= 1 - roadFlatten * 0.65;
+        h *= 1 - roadFlatten * 0.82;
       }
     }
+  } else if (biome === 'coastal') {
+    const coastCoord = x * 0.68 + z * 0.73 + fbm2D(x * 0.048, z * 0.048, 2) * 6.0;
+    const plateauMask = 1 - smoothstep(18.0, 24.5, r);
 
-    return h;
-  }
+    const seaBlend = smoothstep(20.5, 32.5, coastCoord);
+    const n1 = fbm2D(x * 0.035 + 7.2, z * 0.035 + 2.8, 3);
 
-  if (biome === 'coastal') {
-    const coastCoord = x * 0.68 + z * 0.73 + fbm2D(x * 0.055, z * 0.055, 2) * 6.5;
-    const plateauMask = 1 - smoothstep(12.0, 16.5, r);
-
-    const seaBlend = smoothstep(13.5, 23.5, coastCoord);
-    const n1 = fbm2D(x * 0.04 + 7.2, z * 0.04 + 2.8, 3);
-
-    const inlandFactor = smoothstep(16.0, 52.0, r) * (1 - smoothstep(2.0, 16.0, coastCoord));
-    let h = inlandFactor * (14.5 + n1 * 7.5);
+    const inlandFactor = smoothstep(25.0, 72.0, r) * (1 - smoothstep(6.0, 22.0, coastCoord));
+    h = inlandFactor * (16.0 + n1 * 8.2);
 
     h = h * (1 - seaBlend) + (-4.2 + n1 * 0.8) * seaBlend;
 
-    const isl1 = Math.hypot(x - 38, z - 28);
-    const isl2 = Math.hypot(x - 24, z - 44);
-    const isl3 = Math.hypot(x - 52, z - 6);
+    const isl1 = Math.hypot(x - 48, z - 36);
+    const isl2 = Math.hypot(x - 32, z - 56);
+    const isl3 = Math.hypot(x - 66, z - 10);
     const islandBoost =
-      (1 - smoothstep(4, 13, isl1)) * (7.2 + n1 * 2.5) +
-      (1 - smoothstep(3.5, 11, isl2)) * (5.9 + n1 * 2.0) +
-      (1 - smoothstep(5, 15, isl3)) * (7.8 + n1 * 2.8);
+      (1 - smoothstep(4.5, 14.5, isl1)) * (7.8 + n1 * 2.6) +
+      (1 - smoothstep(4.0, 12.5, isl2)) * (6.4 + n1 * 2.2) +
+      (1 - smoothstep(5.5, 16.5, isl3)) * (8.4 + n1 * 2.8);
     h += islandBoost;
 
     h = h * (1 - plateauMask);
-    return h;
-  }
+  } else if (biome === 'arctic') {
+    const plateauBlend = smoothstep(20.5, 31.5, r);
+    const n1 = fbm2D(x * 0.032 + 5.7, z * 0.032 - 4.2, 3);
+    const n2 = fbm2D(x * 0.08 - 2.3, z * 0.08 + 6.1, 2);
 
-  if (biome === 'arctic') {
-    const plateauBlend = smoothstep(14.0, 21.5, r);
-    const n1 = fbm2D(x * 0.036 + 5.7, z * 0.036 - 4.2, 3);
-    const n2 = fbm2D(x * 0.085 - 2.3, z * 0.085 + 6.1, 2);
-
-    // Jagged glacial peaks ringing the snow plateau
-    const ridgeNoise = Math.abs(n1) * 10.5 + Math.abs(n2) * 5.8;
-    const glacierRing = smoothstep(23.0, 58.0, r) * (14.5 + ridgeNoise);
-    let h = plateauBlend * (n1 * 2.1 + n2 * 0.75) + glacierRing;
+    // Jagged glacial peaks ringing the expanded snow plateau
+    const ridgeNoise = Math.abs(n1) * 11.2 + Math.abs(n2) * 6.2;
+    const glacierRing = smoothstep(35.0, 80.0, r) * (16.5 + ridgeNoise);
+    h = plateauBlend * (n1 * 1.9 + n2 * 0.68) + glacierRing;
 
     // Frozen Arctic Fjord cutting along the East/South-East edge
-    const fjordCoord = x * 0.74 + z * 0.67 + fbm2D(x * 0.05, z * 0.05, 2) * 5.2;
-    const fjordBlend = smoothstep(17.5, 26.0, fjordCoord) * smoothstep(13.8, 18.0, r);
+    const fjordCoord = x * 0.74 + z * 0.67 + fbm2D(x * 0.045, z * 0.045, 2) * 5.0;
+    const fjordBlend = smoothstep(25.0, 35.5, fjordCoord) * smoothstep(20.0, 25.5, r);
     h = h * (1 - fjordBlend) + (-3.4 + n2 * 0.35) * fjordBlend;
 
     // Snow-cleared northern ice runway strip
-    if (Math.abs(z + 11.8) < 3.5 && Math.abs(x) < 20) {
-      const stripMask = (1 - smoothstep(2.1, 3.5, Math.abs(z + 11.8))) * (1 - smoothstep(15, 20, Math.abs(x)));
+    if (Math.abs(z + 11.8) < 3.6 && Math.abs(x) < 22) {
+      const stripMask = (1 - smoothstep(2.1, 3.6, Math.abs(z + 11.8))) * (1 - smoothstep(16, 22, Math.abs(x)));
       h *= 1 - stripMask;
     }
+  } else {
+    // biome === 'desert'
+    const plateauBlend = smoothstep(21.0, 32.0, r);
+    const n1 = fbm2D(x * 0.028 - 4.1, z * 0.028 + 8.3, 3);
+    const n2 = fbm2D(x * 0.07 + 1.5, z * 0.07 - 6.2, 2);
 
-    return h;
+    const rawMesa = smoothstep(36, 80, r) * (17.5 + n1 * 9.4);
+    const terraceStep = 3.4;
+    const terraced =
+      Math.floor(rawMesa / terraceStep) * terraceStep +
+      smoothstep(0.35, 0.75, (rawMesa % terraceStep) / terraceStep) * terraceStep;
+
+    h = plateauBlend * (n1 * 1.3 + n2 * 0.55) + terraced;
+
+    const canyonLine = x * 0.55 - z * 0.82 - 27 + Math.sin(x * 0.05) * 4.5;
+    const canyonMask = (1 - smoothstep(3.0, 9.5, Math.abs(canyonLine))) * smoothstep(22.0, 28.0, r);
+    h -= canyonMask * 4.4;
+
+    if (Math.abs(z + 11.5) < 3.8 && Math.abs(x) < 23) {
+      const stripMask = (1 - smoothstep(2.2, 3.8, Math.abs(z + 11.5))) * (1 - smoothstep(17, 23, Math.abs(x)));
+      h *= 1 - stripMask;
+    }
   }
 
-  // biome === 'desert'
-  const plateauBlend = smoothstep(14.5, 22.5, r);
-  const n1 = fbm2D(x * 0.032 - 4.1, z * 0.032 + 8.3, 3);
-  const n2 = fbm2D(x * 0.075 + 1.5, z * 0.075 - 6.2, 2);
+  // Smoothly flatten the convoy access road corridor (except over the Alpine river crossing!)
+  const convoyPts = CONVOY_WAYPOINTS_BY_BIOME[biome];
+  const dRoad = distanceToPolyline(x, z, convoyPts);
+  if (dRoad < 4.4 && r > 9.5) {
+    const overAlpineRiver = biome === 'alpine' && Math.abs(z - riverCenterZ(x)) < 5.0;
+    if (!overAlpineRiver) {
+      const roadBlend = 1 - smoothstep(1.8, 4.4, dRoad);
+      h *= 1 - roadBlend * 0.85;
+    }
+  }
 
-  const rawMesa = smoothstep(24, 58, r) * (15.8 + n1 * 8.8);
-  const terraceStep = 3.4;
-  const terraced =
-    Math.floor(rawMesa / terraceStep) * terraceStep +
-    smoothstep(0.35, 0.75, (rawMesa % terraceStep) / terraceStep) * terraceStep;
-
-  let h = plateauBlend * (n1 * 1.4 + n2 * 0.6) + terraced;
-
-  const canyonLine = x * 0.55 - z * 0.82 - 19 + Math.sin(x * 0.06) * 4.0;
-  const canyonMask = (1 - smoothstep(2.8, 9.0, Math.abs(canyonLine))) * smoothstep(15.5, 21.0, r);
-  h -= canyonMask * 4.4;
-
-  if (Math.abs(z + 11.5) < 3.6 && Math.abs(x) < 22) {
-    const stripMask = (1 - smoothstep(2.2, 3.6, Math.abs(z + 11.5))) * (1 - smoothstep(16, 22, Math.abs(x)));
-    h *= 1 - stripMask;
+  // Smoothly sculpt the 4 Fortified Strategic High-Ground Pads directly into the terrain!
+  const pads = HIGH_GROUND_PADS_BY_BIOME[biome];
+  for (let i = 0; i < pads.length; i++) {
+    const p = pads[i];
+    const d = Math.hypot(x - p.x, z - p.z);
+    if (d < p.radius + 4.4) {
+      const padBlend = 1 - smoothstep(p.radius - 0.15, p.radius + 4.4, d);
+      h = h * (1 - padBlend) + p.elevation * padBlend;
+    }
   }
 
   return h;
 }
 
 /**
- * Checks whether (x, z) is valid flat buildable ground for a defense tower.
+ * Checks whether (x, z) is valid buildable ground for a defense tower (expanded 43m radius + High-Ground Pads!).
  */
 export function isBuildableSpot(x: number, z: number, biome: MapBiome): boolean {
   const distToBase = Math.hypot(x, z);
-  if (distToBase < 4.0 || distToBase > 33.5) return false;
+  if (distToBase < 4.0 || distToBase > 43.0) return false;
+
+  // Elevated Strategic High-Ground Pads are explicitly fortified buildable platforms!
+  if (findHighGroundPad(x, z, biome, 2.7)) {
+    return true;
+  }
+
+  // Keep central south helipad spot clear so base helicopter never clips a tower
+  if (Math.hypot(x, z - 6.4) < 3.1) return false;
+
+  // Keep ATC control tower pad clear
+  if (Math.hypot(x - 12.6, z + 7.2) < 3.0) return false;
 
   const h = getGroundHeight(x, z, biome);
   if ((biome === 'coastal' || biome === 'arctic') && h < -0.35) return false;
   if (biome === 'alpine' && h < -0.45) return false;
-  if (Math.abs(h) > 1.65) return false;
+  if (Math.abs(h) > 1.85) return false;
 
   const hx = getGroundHeight(x + 1.0, z, biome);
   const hz = getGroundHeight(x, z + 1.0, biome);
   const slope = Math.max(Math.abs(hx - h), Math.abs(hz - h));
-  if (slope > 0.45) return false;
+  if (slope > 0.48) return false;
 
   return true;
 }
@@ -609,8 +749,8 @@ function buildTwilightSky(cfg: BiomeConfig): {
  * Builds faceted Low-Poly Terrain Mesh with richer elevation/slope vertex colors.
  */
 function buildLowPolyTerrain(biome: MapBiome): THREE.Mesh {
-  const size = 260;
-  const segs = 78;
+  const size = 340;
+  const segs = 96;
   const baseGeo = new THREE.PlaneGeometry(size, size, segs, segs);
   baseGeo.rotateX(-Math.PI / 2);
 
@@ -776,6 +916,108 @@ function buildMilitaryTruck(biome: MapBiome): THREE.Group {
 }
 
 /**
+ * Builds an animated Armored Military Supply Convoy Truck (rotating wheels, roof beacon, night headlight cones!).
+ */
+export function buildConvoyTruck3D(biome: MapBiome): ConvoyTruckRig {
+  const group = new THREE.Group();
+  const bodyHex = biome === 'desert' ? 0xb4966e : biome === 'arctic' ? 0xb7cad9 : 0x425946;
+  const cabMat = new THREE.MeshStandardMaterial({ color: bodyHex, roughness: 0.58, metalness: 0.28, flatShading: true });
+  const tarpMat = new THREE.MeshStandardMaterial({
+    color: biome === 'desert' ? 0x8c7658 : biome === 'arctic' ? 0xdbeafe : 0x2e4234,
+    roughness: 0.84,
+    flatShading: true,
+  });
+  const stripeMat = new THREE.MeshStandardMaterial({ color: 0x10b981, emissive: 0x059669, emissiveIntensity: 0.65, roughness: 0.4 });
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x14181f, roughness: 0.9 });
+  const headMat = new THREE.MeshBasicMaterial({ color: 0xfef9c3 });
+  const beaconMat = new THREE.MeshStandardMaterial({
+    color: 0xf59e0b,
+    emissive: 0xf59e0b,
+    emissiveIntensity: 1.8,
+    roughness: 0.2,
+  });
+
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.36, 0.38, 3.35), wheelMat);
+  chassis.position.y = 0.42;
+  group.add(chassis);
+
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.88, 1.15), cabMat);
+  cab.position.set(0, 0.94, 1.02);
+  cab.castShadow = true;
+  group.add(cab);
+
+  const windshield = new THREE.Mesh(
+    new THREE.BoxGeometry(1.06, 0.34, 0.08),
+    new THREE.MeshStandardMaterial({ color: 0x0f2942, emissive: 0x38bdf8, emissiveIntensity: 0.45, roughness: 0.15, metalness: 0.85 })
+  );
+  windshield.position.set(0, 1.06, 1.6);
+  group.add(windshield);
+
+  const cargo = new THREE.Mesh(new THREE.BoxGeometry(1.42, 1.12, 2.08), tarpMat);
+  cargo.position.set(0, 1.14, -0.62);
+  cargo.castShadow = true;
+  group.add(cargo);
+
+  // Supply cross/emblem band so players instantly recognize friendly logistics convoy
+  const sideBand = new THREE.Mesh(new THREE.BoxGeometry(1.46, 0.2, 1.85), stripeMat);
+  sideBand.position.set(0, 1.08, -0.62);
+  group.add(sideBand);
+
+  const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.18, 6), beaconMat);
+  beacon.position.set(0, 1.48, 1.02);
+  group.add(beacon);
+
+  const wheels: THREE.Object3D[] = [];
+  const wheelGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.26, 8);
+  wheelGeo.rotateZ(Math.PI / 2);
+  const hubGeo = new THREE.BoxGeometry(0.28, 0.09, 0.44);
+  for (const wx of [-0.68, 0.68]) {
+    for (const wz of [-1.05, 0.0, 1.05]) {
+      const wGroup = new THREE.Group();
+      wGroup.position.set(wx, 0.3, wz);
+      wGroup.add(new THREE.Mesh(wheelGeo, wheelMat));
+      wGroup.add(new THREE.Mesh(hubGeo, cabMat));
+      group.add(wGroup);
+      wheels.push(wGroup);
+    }
+  }
+
+  const coneGeo = new THREE.ConeGeometry(0.85, 4.4, 8, 1, true);
+  coneGeo.translate(0, -2.2, 0);
+  coneGeo.rotateX(-Math.PI / 2);
+  const coneMat = new THREE.MeshBasicMaterial({
+    color: 0xfef08a,
+    transparent: true,
+    opacity: 0.12,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+
+  for (const lx of [-0.42, 0.42]) {
+    const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.13, 0.08), headMat);
+    lamp.position.set(lx, 0.72, 1.63);
+    group.add(lamp);
+
+    const beam = new THREE.Mesh(coneGeo, coneMat);
+    beam.position.set(lx, 0.72, 1.68);
+    beam.rotation.x = 0.16;
+    group.add(beam);
+  }
+
+  const updateAnim = (dt: number, timeSec: number, speed: number, nightFactor: number) => {
+    const wheelDelta = (speed * dt) / 0.3;
+    for (let i = 0; i < wheels.length; i++) {
+      wheels[i].rotation.x += wheelDelta;
+    }
+    beaconMat.emissiveIntensity = 1.0 + 1.6 * (0.5 + 0.5 * Math.sin(timeSec * 8.5));
+    coneMat.opacity = 0.06 + Math.max(0, Math.min(1, nightFactor)) * 0.28;
+  };
+
+  return { group, updateAnim };
+}
+
+/**
  * Builds 4 Perimeter Low-Poly Searchlight Towers with sweeping twilight volumetric cones.
  */
 function buildSearchlightTowers(
@@ -897,9 +1139,23 @@ function buildSearchlightTowers(
  * 1024px Helipad Apron, Instanced T-Wall Perimeter Barriers, Hangar, Fuel Silos,
  * Tall Radio Comms Mast, Generator Array, and Parked Military Trucks.
  */
-function buildBaseStructures(biome: MapBiome): { group: THREE.Group; blinkingBeacons: THREE.MeshBasicMaterial[] } {
+function buildBaseStructures(biome: MapBiome): {
+  group: THREE.Group;
+  blinkingBeacons: THREE.MeshBasicMaterial[];
+  atcRadar: THREE.Object3D;
+  heliMainRotor: THREE.Object3D;
+  heliTailRotor: THREE.Object3D;
+  alertBeacons: THREE.MeshBasicMaterial[];
+  patrolRover: {
+    group: THREE.Group;
+    wheels: THREE.Object3D[];
+    headlightMat: THREE.MeshBasicMaterial;
+  };
+  highGroundBeaconMat: THREE.MeshBasicMaterial;
+} {
   const baseGroup = new THREE.Group();
   const blinkingBeacons: THREE.MeshBasicMaterial[] = [];
+  const alertBeacons: THREE.MeshBasicMaterial[] = [];
 
   // 1. High-Res Central Octagonal Concrete Defense Apron with Painted Helipad
   const padTex = createBasePadTexture(biome);
@@ -919,7 +1175,6 @@ function buildBaseStructures(biome: MapBiome): { group: THREE.Group; blinkingBea
   // 2. Instanced Perimeter Concrete Blast T-Walls around base compound (1 draw call!)
   const wallPositions: { x: number; y: number; z: number; rot: number }[] = [];
   for (let i = 0; i < 24; i++) {
-    // Leave clean gaps at cardinal roads & coastal pier entry
     if (i % 6 === 0) continue;
     const a = (i / 24) * Math.PI * 2;
     const r = 10.2;
@@ -951,18 +1206,18 @@ function buildBaseStructures(biome: MapBiome): { group: THREE.Group; blinkingBea
     baseGroup.add(wallInst);
   }
 
-  // 3. Perimeter Amber Beacon Posts (Instanced)
+  // 3. Perimeter Amber Beacon Posts & Instanced Base Compound Props (Ammo Crates & Fuel Drums)
   const postGeo = new THREE.CylinderGeometry(0.08, 0.12, 0.58, 5);
   const bulbGeo = new THREE.SphereGeometry(0.13, 6, 6);
   const beaconPostMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.6, metalness: 0.5 });
   const amberGlowMat = new THREE.MeshBasicMaterial({ color: 0xfbbf24 });
-  const postInst = new THREE.InstancedMesh(postGeo, beaconPostMat, 8);
-  const bulbInst = new THREE.InstancedMesh(bulbGeo, amberGlowMat, 8);
+  const postInst = new THREE.InstancedMesh(postGeo, beaconPostMat, 12);
+  const bulbInst = new THREE.InstancedMesh(bulbGeo, amberGlowMat, 12);
   const dummy = new THREE.Object3D();
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
-    const bx = Math.cos(a) * 9.35;
-    const bz = Math.sin(a) * 9.35;
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2 + Math.PI / 12;
+    const bx = Math.cos(a) * 9.55;
+    const bz = Math.sin(a) * 9.55;
     dummy.position.set(bx, 0.32, bz);
     dummy.rotation.set(0, 0, 0);
     dummy.scale.setScalar(1);
@@ -975,6 +1230,41 @@ function buildBaseStructures(biome: MapBiome): { group: THREE.Group; blinkingBea
   postInst.instanceMatrix.needsUpdate = true;
   bulbInst.instanceMatrix.needsUpdate = true;
   baseGroup.add(postInst, bulbInst);
+
+  // Instanced Stacked Supply Crates & Hesco Sandbag Clusters along apron edges (1 draw call!)
+  const crateCoords: [number, number, number][] = [
+    [-8.4, -5.8, 0.3],
+    [-8.9, -5.2, 0.1],
+    [-8.1, -6.4, -0.2],
+    [8.2, -5.6, 0.4],
+    [8.8, -5.1, -0.2],
+    [7.4, 6.2, 0.8],
+    [8.0, 5.7, 0.2],
+    [-7.6, 6.4, -0.5],
+    [-8.2, 5.9, 0.1],
+    [-11.0, 0.4, 0.2],
+    [10.8, 0.4, -0.3],
+    [11.2, -4.8, 0.6],
+  ];
+  const crateGeo = new THREE.BoxGeometry(0.62, 0.48, 0.62);
+  const crateMat = new THREE.MeshStandardMaterial({
+    color: biome === 'desert' ? 0x8f7c5c : biome === 'arctic' ? 0x647a8e : 0x4b5d44,
+    roughness: 0.85,
+    flatShading: true,
+  });
+  const crateInst = new THREE.InstancedMesh(crateGeo, crateMat, crateCoords.length);
+  crateInst.receiveShadow = true;
+  crateCoords.forEach(([cx, cz, ry], idx) => {
+    const cy = getGroundHeight(cx, cz, biome);
+    dummy.position.set(cx, cy + 0.24, cz);
+    dummy.rotation.set(0, ry, 0);
+    dummy.scale.set(1, idx % 3 === 0 ? 1.45 : 1, 1);
+    dummy.updateMatrix();
+    crateInst.setMatrixAt(idx, dummy.matrix);
+  });
+  crateInst.instanceMatrix.needsUpdate = true;
+  crateInst.computeBoundingSphere();
+  baseGroup.add(crateInst);
 
   // 4. Armored Military Hangar (North-West flank) + Parked Command Truck
   const hangar = new THREE.Group();
@@ -1022,21 +1312,21 @@ function buildBaseStructures(biome: MapBiome): { group: THREE.Group; blinkingBea
   baseGroup.add(hangar);
 
   const parkedTruck = buildMilitaryTruck(biome);
-  const tx = -9.6;
+  const tx = -11.4;
   const tz = 1.8;
   parkedTruck.position.set(tx, getGroundHeight(tx, tz, biome), tz);
   parkedTruck.rotation.y = 0.45;
   baseGroup.add(parkedTruck);
 
-  // 5. Twin Fuel Silos + Solar/Generator Substation (North-East flank)
+  // 5. Twin Fuel Silos (East flank)
   const siloMat = new THREE.MeshStandardMaterial({
     color: biome === 'desert' ? 0x9c8971 : 0x64748b,
     roughness: 0.48,
     metalness: 0.5,
     flatShading: true,
   });
-  const sx = 11.4;
-  const sz = -2.6;
+  const sx = 11.8;
+  const sz = -2.8;
   const sy = getGroundHeight(sx, sz, biome);
   for (let k = 0; k < 2; k++) {
     const silo = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 2.3, 8), siloMat);
@@ -1050,7 +1340,91 @@ function buildBaseStructures(biome: MapBiome): { group: THREE.Group; blinkingBea
     baseGroup.add(cap);
   }
 
-  // Tall Red/White Communications Radio Mast behind hangar
+  // 6. Central Base Air Traffic Control (ATC) Radar Tower (North-East Flank, collision-free)
+  const atcGroup = new THREE.Group();
+  const ax = 12.6;
+  const az = -7.2;
+  atcGroup.position.set(ax, getGroundHeight(ax, az, biome), az);
+  const atcShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.88, 1.24, 4.6, 6), hangarWallMat);
+  atcShaft.position.y = 2.3;
+  atcShaft.castShadow = true;
+  atcGroup.add(atcShaft);
+  const atcCab = new THREE.Mesh(new THREE.CylinderGeometry(1.58, 1.18, 1.1, 8), warmWinMat);
+  atcCab.position.y = 5.05;
+  atcGroup.add(atcCab);
+  const atcRoof = new THREE.Mesh(new THREE.CylinderGeometry(1.72, 1.6, 0.28, 8), roofMat);
+  atcRoof.position.y = 5.72;
+  atcGroup.add(atcRoof);
+  const atcRadar = new THREE.Group();
+  atcRadar.position.y = 6.32;
+  const atcBar = new THREE.Mesh(
+    new THREE.BoxGeometry(2.15, 0.36, 0.14),
+    new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.65, roughness: 0.32 })
+  );
+  atcRadar.add(atcBar);
+  atcGroup.add(atcRadar);
+  const atcAlertMat = new THREE.MeshBasicMaterial({ color: 0xff2a55 });
+  blinkingBeacons.push(atcAlertMat);
+  alertBeacons.push(atcAlertMat);
+  const atcStrobe = new THREE.Mesh(new THREE.SphereGeometry(0.2, 6, 6), atcAlertMat);
+  atcStrobe.position.y = 6.72;
+  atcGroup.add(atcStrobe);
+  baseGroup.add(atcGroup);
+
+  // 7. Base Utility Helicopter parked on South Helipad (spinning main + tail rotors revving during raids!)
+  const heliGroup = new THREE.Group();
+  heliGroup.position.set(0, 0.16, 6.4);
+  heliGroup.rotation.y = 0.35;
+  const heliHullMat = new THREE.MeshStandardMaterial({
+    color: biome === 'desert' ? 0x6b5c49 : biome === 'arctic' ? 0x475e75 : 0x2d3a36,
+    roughness: 0.45,
+    metalness: 0.48,
+    flatShading: true,
+  });
+  const heliGlassMat = new THREE.MeshStandardMaterial({
+    color: 0x0f2942,
+    emissive: 0x38bdf8,
+    emissiveIntensity: 0.55,
+    roughness: 0.16,
+    metalness: 0.85,
+  });
+  const heliBody = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.72, 2.35), heliHullMat);
+  heliBody.position.set(0, 0.66, 0.15);
+  heliBody.castShadow = true;
+  heliGroup.add(heliBody);
+  const heliNose = new THREE.Mesh(new THREE.ConeGeometry(0.58, 0.95, 4), heliGlassMat);
+  heliNose.rotation.x = Math.PI / 2;
+  heliNose.rotation.y = Math.PI / 4;
+  heliNose.position.set(0, 0.62, 1.72);
+  heliGroup.add(heliNose);
+  const heliTail = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.28, 2.1), heliHullMat);
+  heliTail.position.set(0, 0.78, -1.85);
+  heliGroup.add(heliTail);
+  const heliFin = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.78, 0.46), heliHullMat);
+  heliFin.position.set(0, 1.08, -2.75);
+  heliGroup.add(heliFin);
+  for (const sx of [-0.62, 0.62]) {
+    const skid = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 2.2), roofMat);
+    skid.position.set(sx, 0.12, 0.25);
+    heliGroup.add(skid);
+  }
+  const heliMainRotor = new THREE.Group();
+  heliMainRotor.position.set(0, 1.24, 0.2);
+  const mainBladeGeo = new THREE.BoxGeometry(3.8, 0.04, 0.16);
+  const mb1 = new THREE.Mesh(mainBladeGeo, roofMat);
+  const mb2 = new THREE.Mesh(mainBladeGeo, roofMat);
+  mb2.rotation.y = Math.PI / 2;
+  heliMainRotor.add(mb1, mb2);
+  heliGroup.add(heliMainRotor);
+
+  const heliTailRotor = new THREE.Group();
+  heliTailRotor.position.set(0.14, 1.15, -2.78);
+  const tailBlade = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.76, 0.1), roofMat);
+  heliTailRotor.add(tailBlade);
+  heliGroup.add(heliTailRotor);
+  baseGroup.add(heliGroup);
+
+  // 8. Tall Red/White Communications Radio Mast behind hangar
   const mastGroup = new THREE.Group();
   const mx = -10.8;
   const mz = -7.2;
@@ -1071,7 +1445,145 @@ function buildBaseStructures(biome: MapBiome): { group: THREE.Group; blinkingBea
   mastGroup.add(radioStrobe);
   baseGroup.add(mastGroup);
 
-  return { group: baseGroup, blinkingBeacons };
+  // 9. 4 Fortified Strategic High-Ground Pads (Concrete/Steel Octagonal Platforms + Corner Cyan Beacons!)
+  const highGroundBeaconMat = new THREE.MeshBasicMaterial({ color: 0x22d3ee });
+  const hgPadConcreteMat = new THREE.MeshStandardMaterial({
+    color: biome === 'desert' ? 0x6b5c4d : 0x3b4859,
+    roughness: 0.76,
+    metalness: 0.22,
+    flatShading: true,
+  });
+  const hgRingMat = new THREE.MeshBasicMaterial({
+    color: 0x22d3ee,
+    transparent: true,
+    opacity: 0.42,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const pads = HIGH_GROUND_PADS_BY_BIOME[biome];
+  pads.forEach((p) => {
+    const padG = new THREE.Group();
+    padG.position.set(p.x, p.elevation, p.z);
+
+    // Tapered reinforced octagonal platform grounded deep into the sculpted hill
+    const plinth = new THREE.Mesh(new THREE.CylinderGeometry(2.75, 3.35, 0.72, 8), hgPadConcreteMat);
+    plinth.position.y = -0.32;
+    plinth.receiveShadow = true;
+    plinth.castShadow = true;
+    padG.add(plinth);
+
+    const deckRing = new THREE.Mesh(new THREE.RingGeometry(2.05, 2.38, 16), hgRingMat);
+    deckRing.rotation.x = -Math.PI / 2;
+    deckRing.position.y = 0.06;
+    padG.add(deckRing);
+
+    for (let c = 0; c < 4; c++) {
+      const ca = (c * Math.PI) / 2 + Math.PI / 4;
+      const pylon = new THREE.Mesh(postGeo, beaconPostMat);
+      pylon.position.set(Math.cos(ca) * 2.55, 0.26, Math.sin(ca) * 2.55);
+      padG.add(pylon);
+      const led = new THREE.Mesh(bulbGeo, highGroundBeaconMat);
+      led.position.set(Math.cos(ca) * 2.55, 0.58, Math.sin(ca) * 2.55);
+      padG.add(led);
+    }
+
+    baseGroup.add(padG);
+  });
+
+  // 10. Painted Perimeter Supply Convoy Access Road (connects outer sector entrance to HQ gate!)
+  const convoyPts = CONVOY_WAYPOINTS_BY_BIOME[biome];
+  const roadMat = new THREE.MeshStandardMaterial({
+    color: biome === 'arctic' ? 0x32414f : biome === 'desert' ? 0x3b332d : 0x27303a,
+    roughness: 0.88,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+  });
+  const dashMat = new THREE.MeshBasicMaterial({ color: 0xe2e8f0, transparent: true, opacity: 0.65 });
+  for (let i = 0; i < convoyPts.length - 1; i++) {
+    const a = convoyPts[i];
+    const b = convoyPts[i + 1];
+    const segLen = Math.hypot(b.x - a.x, b.z - a.z);
+    const steps = Math.max(2, Math.ceil(segLen / 4.2));
+    const yaw = Math.atan2(b.x - a.x, b.z - a.z);
+    for (let s = 0; s < steps; s++) {
+      const t0 = s / steps;
+      const t1 = (s + 1) / steps;
+      const mx0 = a.x + (b.x - a.x) * ((t0 + t1) * 0.5);
+      const mz0 = a.z + (b.z - a.z) * ((t0 + t1) * 0.5);
+      // Skip Alpine bridge span itself (bridge deck already sits there!)
+      if (biome === 'alpine' && Math.abs(mz0 - riverCenterZ(-2.0)) < 6.0) continue;
+      const my = getGroundHeight(mx0, mz0, biome);
+      const pieceLen = segLen / steps + 0.25;
+      const segMesh = new THREE.Mesh(new THREE.BoxGeometry(3.15, 0.1, pieceLen), roadMat);
+      segMesh.position.set(mx0, my + 0.05, mz0);
+      segMesh.rotation.y = yaw;
+      segMesh.receiveShadow = true;
+      baseGroup.add(segMesh);
+
+      if (s % 2 === 0) {
+        const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.18, pieceLen * 0.45), dashMat);
+        dash.rotation.x = -Math.PI / 2;
+        dash.rotation.z = -yaw;
+        dash.position.set(mx0, my + 0.12, mz0);
+        baseGroup.add(dash);
+      }
+    }
+  }
+
+  // 11. Ambient Armored Base Patrol Rover (continuously patrols inner compound perimeter!)
+  const roverGroup = new THREE.Group();
+  const roverBodyMat = new THREE.MeshStandardMaterial({
+    color: biome === 'desert' ? 0x9c825f : biome === 'arctic' ? 0x9eb2c4 : 0x3b4d3f,
+    roughness: 0.6,
+    metalness: 0.3,
+    flatShading: true,
+  });
+  const roverWheelMat = new THREE.MeshStandardMaterial({ color: 0x151920, roughness: 0.9 });
+  const rBody = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.44, 1.82), roverBodyMat);
+  rBody.position.y = 0.44;
+  rBody.castShadow = true;
+  roverGroup.add(rBody);
+  const rCab = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.36, 0.86), roofMat);
+  rCab.position.set(0, 0.78, -0.08);
+  roverGroup.add(rCab);
+  const rWheels: THREE.Object3D[] = [];
+  const rwGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.18, 6);
+  rwGeo.rotateZ(Math.PI / 2);
+  for (const rx of [-0.48, 0.48]) {
+    for (const rz of [-0.58, 0.58]) {
+      const rw = new THREE.Mesh(rwGeo, roverWheelMat);
+      rw.position.set(rx, 0.22, rz);
+      roverGroup.add(rw);
+      rWheels.push(rw);
+    }
+  }
+  const roverHeadlightMat = new THREE.MeshBasicMaterial({
+    color: 0xfef08a,
+    transparent: true,
+    opacity: 0.1,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const rConeGeo = new THREE.ConeGeometry(0.55, 3.2, 6, 1, true);
+  rConeGeo.translate(0, -1.6, 0);
+  rConeGeo.rotateX(-Math.PI / 2);
+  const rBeam = new THREE.Mesh(rConeGeo, roverHeadlightMat);
+  rBeam.position.set(0, 0.48, 0.95);
+  rBeam.rotation.x = 0.15;
+  roverGroup.add(rBeam);
+  baseGroup.add(roverGroup);
+
+  return {
+    group: baseGroup,
+    blinkingBeacons,
+    atcRadar,
+    heliMainRotor,
+    heliTailRotor,
+    alertBeacons,
+    patrolRover: { group: roverGroup, wheels: rWheels, headlightMat: roverHeadlightMat },
+    highGroundBeaconMat,
+  };
 }
 
 /**
@@ -1083,18 +1595,20 @@ function buildInstancedPines(biome: MapBiome, targetCount: number): THREE.Group 
 
   for (let attempt = 0; attempt < targetCount * 6 && positions.length < targetCount; attempt++) {
     const angle = hash2(attempt, 11.3) * Math.PI * 2;
-    const rad = 16.8 + hash2(attempt, 23.7) * 58.0;
+    const rad = 22.0 + hash2(attempt, 23.7) * 74.0;
     const x = Math.cos(angle) * rad;
     const z = Math.sin(angle) * rad;
+    if (findHighGroundPad(x, z, biome, 6.2)) continue;
+    if (distanceToPolyline(x, z, CONVOY_WAYPOINTS_BY_BIOME[biome]) < 4.5) continue;
     const y = getGroundHeight(x, z, biome);
 
     if (biome === 'alpine') {
       const distRiver = Math.abs(z - riverCenterZ(x));
       if (distRiver < 5.5) continue;
-      if (z > 8 && z < 44 && Math.abs(x + 2.0) < 4.8) continue;
-      if (y < -0.2 || y > 10.2) continue;
+      if (z > 8 && z < 60 && Math.abs(x + 2.0) < 5.0) continue;
+      if (y < -0.2 || y > 11.5) continue;
     } else if (biome === 'coastal') {
-      if (y < 0.35 || y > 8.5) continue;
+      if (y < 0.35 || y > 9.5) continue;
     }
 
     positions.push({
@@ -1176,13 +1690,15 @@ function buildInstancedRocks(biome: MapBiome, targetCount: number): THREE.Instan
 
   for (let attempt = 0; attempt < targetCount * 5 && placements.length < targetCount; attempt++) {
     const angle = hash2(attempt, 91.2) * Math.PI * 2;
-    const rad = 15.8 + hash2(attempt, 103.4) * 56.0;
+    const rad = 21.5 + hash2(attempt, 103.4) * 72.0;
     const x = Math.cos(angle) * rad;
     const z = Math.sin(angle) * rad;
+    if (findHighGroundPad(x, z, biome, 6.0)) continue;
+    if (distanceToPolyline(x, z, CONVOY_WAYPOINTS_BY_BIOME[biome]) < 4.6) continue;
     const y = getGroundHeight(x, z, biome);
 
     if (biome === 'coastal' && y < -1.2) continue;
-    if (biome === 'desert' && Math.abs(z + 12.0) < 5.0 && Math.abs(x) < 23) continue;
+    if (biome === 'desert' && Math.abs(z + 12.0) < 5.0 && Math.abs(x) < 24) continue;
 
     const base = 0.65 + hash2(attempt, 127.8) * 1.65;
     placements.push({
@@ -1248,19 +1764,22 @@ function buildBiomeLandmarks(biome: MapBiome): {
   waterMesh?: THREE.Mesh;
   waterBaseY?: Float32Array;
   bobbingShips: { ship: THREE.Group; baseY: number; phase: number }[];
-  spinners: { obj: THREE.Object3D; speed: number }[];
+  spinners: { obj: THREE.Object3D; speed: number; axis?: 'x' | 'y' | 'z' }[];
   lighthouseBeam?: THREE.Group;
   shoreFoamMat?: THREE.MeshBasicMaterial;
   blinkingMats: THREE.MeshBasicMaterial[];
+  patrolBoat?: { vessel: THREE.Group; centerX: number; centerZ: number; rx: number; rz: number; baseY: number };
+  craneTrolley?: { obj: THREE.Object3D; baseX: number };
+  runwayApproachMats?: THREE.MeshBasicMaterial[];
 } {
   const group = new THREE.Group();
   const bobbingShips: { ship: THREE.Group; baseY: number; phase: number }[] = [];
-  const spinners: { obj: THREE.Object3D; speed: number }[] = [];
+  const spinners: { obj: THREE.Object3D; speed: number; axis?: 'x' | 'y' | 'z' }[] = [];
   const blinkingMats: THREE.MeshBasicMaterial[] = [];
 
   if (biome === 'alpine') {
-    // 1. Winding Alpine River water surface + foaming rapids highlights
-    const riverGeo = new THREE.PlaneGeometry(224, 24, 52, 6);
+    // 1. Winding Alpine River water surface + foaming rapids highlights (expanded 300m width)
+    const riverGeo = new THREE.PlaneGeometry(300, 24, 62, 6);
     riverGeo.rotateX(-Math.PI / 2);
     const rPos = riverGeo.attributes.position;
     for (let i = 0; i < rPos.count; i++) {
@@ -1361,15 +1880,10 @@ function buildBiomeLandmarks(biome: MapBiome): {
       group.add(brace);
     }
 
-    // Parked convoy supply truck crossing the bridge
-    const bridgeTruck = buildMilitaryTruck('alpine');
-    bridgeTruck.position.set(-2.0, 0.48, bridgeZ - 1.2);
-    bridgeTruck.rotation.y = Math.PI;
-    group.add(bridgeTruck);
-
-    // 3. Highland North Ridge Mountain Radar Outpost Cabin
-    const ox = -18.5;
-    const oz = -29.5;
+    // Bridge deck left clear for Live Armored Supply Convoy Trucks crossing into HQ!
+    // 3. Highland North Ridge Mountain Radar Outpost Cabin + 3 Spinning Wind Turbines on Distant Ridges
+    const ox = -24.5;
+    const oz = -39.5;
     const oy = getGroundHeight(ox, oz, 'alpine');
     const outpost = new THREE.Group();
     outpost.position.set(ox, oy, oz);
@@ -1393,16 +1907,45 @@ function buildBiomeLandmarks(biome: MapBiome): {
     const oDish = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.42, 0.12), new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.4, metalness: 0.6 }));
     oRadarPivot.add(oDish);
     outpost.add(oRadarPivot);
-    spinners.push({ obj: oRadarPivot, speed: 1.8 });
-
+    spinners.push({ obj: oRadarPivot, speed: 1.8, axis: 'y' });
     group.add(outpost);
+
+    // 3 Spinning Ridge Wind Turbines for lively mountain motion
+    const turbMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.42, metalness: 0.25, flatShading: true });
+    const turbineCoords: [number, number][] = [
+      [34, -38],
+      [44, -26],
+      [-42, -24],
+    ];
+    turbineCoords.forEach(([tx, tz], idx) => {
+      const ty = getGroundHeight(tx, tz, 'alpine');
+      const tg = new THREE.Group();
+      tg.position.set(tx, ty, tz);
+      tg.rotation.y = -0.5 + idx * 0.4;
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.34, 7.2, 6), turbMat);
+      pole.position.y = 3.6;
+      tg.add(pole);
+      const hub = new THREE.Group();
+      hub.position.set(0, 7.1, 0.38);
+      for (let b = 0; b < 3; b++) {
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.22, 3.1, 0.08), turbMat);
+        const pivot = new THREE.Group();
+        pivot.rotation.z = (b / 3) * Math.PI * 2;
+        blade.position.y = 1.55;
+        pivot.add(blade);
+        hub.add(pivot);
+      }
+      tg.add(hub);
+      spinners.push({ obj: hub, speed: 1.35 + idx * 0.22, axis: 'z' });
+      group.add(tg);
+    });
 
     return { group, waterMesh, bobbingShips, spinners, blinkingMats };
   }
 
   if (biome === 'coastal') {
-    // 1. Low-Poly Animated Twilight Ocean (24x24 faceted grid)
-    const oceanBase = new THREE.PlaneGeometry(268, 268, 24, 24);
+    // 1. Low-Poly Animated Twilight Ocean (expanded 348x348 faceted grid)
+    const oceanBase = new THREE.PlaneGeometry(348, 348, 28, 28);
     oceanBase.rotateX(-Math.PI / 2);
     const oceanGeo = oceanBase.toNonIndexed();
     oceanBase.dispose();
@@ -1556,23 +2099,22 @@ function buildBiomeLandmarks(biome: MapBiome): {
       return { vessel: ship, radarBar };
     };
 
-    const frigate = buildWarship(1.05);
-    frigate.vessel.position.set(22.0, -2.05, 18.2);
+    const frigate = buildWarship(1.08);
+    frigate.vessel.position.set(30.5, -2.05, 25.2);
     frigate.vessel.rotation.y = -Math.PI / 4 + 0.15;
     group.add(frigate.vessel);
     bobbingShips.push({ ship: frigate.vessel, baseY: -2.05, phase: 0 });
     spinners.push({ obj: frigate.radarBar, speed: 2.3 });
 
-    const corvette = buildWarship(0.76);
-    corvette.vessel.position.set(34.5, -2.08, 7.5);
-    corvette.vessel.rotation.y = -Math.PI * 0.65;
+    // Offshore Patrol Corvette actively cruising an elliptical patrol track in the bay!
+    const corvette = buildWarship(0.8);
+    corvette.vessel.position.set(44.5, -2.08, 12.5);
     group.add(corvette.vessel);
-    bobbingShips.push({ ship: corvette.vessel, baseY: -2.08, phase: 2.1 });
-    spinners.push({ obj: corvette.radarBar, speed: 3.0 });
+    spinners.push({ obj: corvette.radarBar, speed: 3.2 });
 
     // 4. Coastal Radar Lighthouse on East Headland
-    const lhX = 15.0;
-    const lhZ = -9.0;
+    const lhX = 21.5;
+    const lhZ = -9.5;
     const lhY = Math.max(-0.5, getGroundHeight(lhX, lhZ, biome));
     const lhGroup = new THREE.Group();
     lhGroup.position.set(lhX, lhY, lhZ);
@@ -1599,8 +2141,8 @@ function buildBiomeLandmarks(biome: MapBiome): {
     const lhBeamGroup = new THREE.Group();
     lhBeamGroup.position.y = 5.85;
     const lhBeamTex = createSearchlightBeamTexture();
-    const lhConeGeo = new THREE.ConeGeometry(2.8, 28, 10, 1, true);
-    lhConeGeo.translate(0, -14, 0);
+    const lhConeGeo = new THREE.ConeGeometry(2.8, 32, 10, 1, true);
+    lhConeGeo.translate(0, -16, 0);
     lhConeGeo.rotateX(Math.PI / 2);
     const lhBeam = new THREE.Mesh(
       lhConeGeo,
@@ -1618,12 +2160,23 @@ function buildBiomeLandmarks(biome: MapBiome): {
     lhGroup.add(lhBeamGroup);
     group.add(lhGroup);
 
-    return { group, waterMesh, waterBaseY, bobbingShips, spinners, lighthouseBeam: lhBeamGroup, shoreFoamMat, blinkingMats };
+    return {
+      group,
+      waterMesh,
+      waterBaseY,
+      bobbingShips,
+      spinners,
+      lighthouseBeam: lhBeamGroup,
+      shoreFoamMat,
+      blinkingMats,
+      patrolBoat: { vessel: corvette.vessel, centerX: 43.0, centerZ: 15.0, rx: 10.5, rz: 14.0, baseY: -2.08 },
+      craneTrolley: { obj: craneCab, baseX: 2.0 },
+    };
   }
 
   if (biome === 'arctic') {
-    // 1. Frozen Arctic Bay Ice Sheet + Floating Glacial Icebergs
-    const iceGeo = new THREE.PlaneGeometry(260, 260, 18, 18);
+    // 1. Frozen Arctic Bay Ice Sheet (expanded 340x340) + Floating Glacial Icebergs
+    const iceGeo = new THREE.PlaneGeometry(340, 340, 22, 22);
     iceGeo.rotateX(-Math.PI / 2);
     const iceMat = new THREE.MeshStandardMaterial({
       color: 0x1e516b,
@@ -1779,13 +2332,17 @@ function buildBiomeLandmarks(biome: MapBiome): {
     }
   }
 
-  // Runway edge approach lights (Instanced spheres)
-  const amberMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+  // Sequential strobing runway approach "rabbit" lights along the desert airstrip!
+  const runwayApproachMats: THREE.MeshBasicMaterial[] = [];
   const cyanMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
-  const lampGeo = new THREE.SphereGeometry(0.14, 6, 6);
-  for (let lx = -16.5; lx <= 16.5; lx += 3.65) {
+  const lampGeo = new THREE.SphereGeometry(0.15, 6, 6);
+  for (let idx = 0, lx = -16.5; lx <= 16.5; lx += 3.65, idx++) {
+    const seqMat = Math.abs(lx) > 13.5 ? cyanMat : new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+    if (Math.abs(lx) <= 13.5) {
+      runwayApproachMats.push(seqMat);
+    }
     for (const lz of [-9.2, -14.8]) {
-      const lamp = new THREE.Mesh(lampGeo, Math.abs(lx) > 13.5 ? cyanMat : amberMat);
+      const lamp = new THREE.Mesh(lampGeo, seqMat);
       lamp.position.set(lx, 0.25, lz);
       group.add(lamp);
     }
@@ -1893,7 +2450,7 @@ function buildBiomeLandmarks(biome: MapBiome): {
     group.add(inst);
   }
 
-  return { group, bobbingShips, spinners, blinkingMats };
+  return { group, bobbingShips, spinners, blinkingMats, runwayApproachMats };
 }
 
 /**
@@ -2069,21 +2626,21 @@ export function buildBiomeWorld(biome: MapBiome): BiomeWorldHandle {
   );
   group.add(searchlightGroup);
 
-  // 5. Biome Foliage & Boulders (Instanced)
+  // 5. Biome Foliage & Boulders (Instanced across expanded 340m map!)
   if (biome === 'alpine') {
-    group.add(buildInstancedPines(biome, 165));
-    const rocks = buildInstancedRocks(biome, 60);
+    group.add(buildInstancedPines(biome, 225));
+    const rocks = buildInstancedRocks(biome, 85);
     if (rocks) group.add(rocks);
   } else if (biome === 'coastal') {
-    group.add(buildInstancedPines(biome, 65));
-    const rocks = buildInstancedRocks(biome, 55);
+    group.add(buildInstancedPines(biome, 90));
+    const rocks = buildInstancedRocks(biome, 75);
     if (rocks) group.add(rocks);
   } else {
-    const rocks = buildInstancedRocks(biome, 85);
+    const rocks = buildInstancedRocks(biome, 110);
     if (rocks) group.add(rocks);
   }
 
-  // 6. Hero Biome Set-Pieces (Alpine Arch Bridge + Outpost / Coastal Crane + Warships / Desert Airbase + ATC + Stealth Jet)
+  // 6. Hero Biome Set-Pieces (Alpine Arch Bridge + Wind Turbines / Coastal Crane + Cruising Corvette / Desert Airbase / Arctic Icebreaker)
   const landmarks = buildBiomeLandmarks(biome);
   group.add(landmarks.group);
 
@@ -2092,15 +2649,22 @@ export function buildBiomeWorld(biome: MapBiome): BiomeWorldHandle {
   group.add(weather.points);
 
   // 8. Warm Central Command Point Light (brightens dramatically during Night Operations)
-  const baseGlow = new THREE.PointLight(0xffb454, 15, 38, 1.6);
+  const baseGlow = new THREE.PointLight(0xffb454, 15, 44, 1.55);
   baseGlow.position.set(0, 4.8, 0);
   group.add(baseGlow);
 
   const allBlinking = [...baseStructs.blinkingBeacons, ...landmarks.blinkingMats];
   const _cloudNightColor = new THREE.Color(0x060b16);
 
-  const update = (timeSec: number, dt: number, nightFactor = 0, searchTargets?: SearchlightTargetPoint[]) => {
+  const update = (
+    timeSec: number,
+    dt: number,
+    nightFactor = 0,
+    searchTargets?: SearchlightTargetPoint[],
+    alertLevel = 0
+  ) => {
     const nf = Math.max(0, Math.min(1, nightFactor));
+    const al = Math.max(0, Math.min(1, alertLevel));
 
     // True Night Operations atmosphere: deep midnight sky dome, dark clouds, luminous stars/moon, vivid AA searchlights
     const skyTint = 1.0 - nf * 0.84;
@@ -2114,7 +2678,7 @@ export function buildBiomeWorld(biome: MapBiome): BiomeWorldHandle {
     sky.starMat.opacity = 0.65 + nf * 0.35;
     sky.starMat.size = 1.05 + nf * 0.72;
     sky.haloMat.opacity = 0.12 + nf * 0.32;
-    baseGlow.intensity = 15 + nf * 26;
+    baseGlow.intensity = 15 + nf * 26 + al * 6;
     searchlightBeamMat.opacity = 0.14 + nf * 0.64;
 
     // Slowly drift Low-Poly twilight cloud ring & shimmer polar aurora ribbons
@@ -2122,11 +2686,43 @@ export function buildBiomeWorld(biome: MapBiome): BiomeWorldHandle {
     for (let i = 0; i < sky.auroraRibbons.length; i++) {
       const ar = sky.auroraRibbons[i];
       ar.mesh.rotation.y += dt * (0.015 + i * 0.008);
-      ar.mat.opacity = (0.16 + nf * 0.14) + 0.07 * Math.sin(timeSec * 0.85 + ar.phase);
+      ar.mat.opacity = 0.16 + nf * 0.14 + 0.07 * Math.sin(timeSec * 0.85 + ar.phase);
     }
 
     // Update Zero-Allocation Biome Weather
     weather.updateWeather(timeSec, dt);
+
+    // Living Base Compound Animations: ATC Radar, Helicopter Rotors (rev up during alerts!), Ambient Patrol Rover
+    baseStructs.atcRadar.rotation.y += dt * (1.85 + al * 1.4);
+    const rotorRpm = 6.5 + al * 13.5;
+    baseStructs.heliMainRotor.rotation.y += dt * rotorRpm;
+    baseStructs.heliTailRotor.rotation.x += dt * (rotorRpm * 2.4);
+
+    // Subtle pulsing cyan LEDs on Strategic High-Ground Pads
+    const hgPulse = 0.5 + 0.5 * Math.sin(timeSec * 2.6);
+    baseStructs.highGroundBeaconMat.color.setRGB(0.12 + hgPulse * 0.1, 0.72 + hgPulse * 0.25, 0.88 + hgPulse * 0.12);
+
+    // Ambient Base Patrol Rover smoothly patrolling inner compound perimeter
+    const rover = baseStructs.patrolRover;
+    const patrolRadius = 15.8;
+    let patrolAngle = timeSec * 0.22;
+    let tangentSign = 1;
+    if (biome === 'coastal') {
+      // Patrol back-and-forth along dry inland crescent (avoiding ocean shoreline)
+      const osc = Math.sin(timeSec * 0.24);
+      patrolAngle = Math.PI * 1.25 + osc * 1.15;
+      tangentSign = Math.cos(timeSec * 0.24) >= 0 ? 1 : -1;
+    }
+    const rx = Math.cos(patrolAngle) * patrolRadius;
+    const rz = Math.sin(patrolAngle) * patrolRadius;
+    const ry = Math.max(-0.05, getGroundHeight(rx, rz, biome));
+    rover.group.position.set(rx, ry, rz);
+    rover.group.rotation.y = -patrolAngle + (tangentSign > 0 ? 0 : Math.PI);
+    const rWheelSpin = dt * 8.5 * tangentSign;
+    for (let w = 0; w < rover.wheels.length; w++) {
+      rover.wheels[w].rotation.x += rWheelSpin;
+    }
+    rover.headlightMat.opacity = 0.05 + nf * 0.26;
 
     // AA Searchlights: dynamically track airborne targets during Night Raid, or sweep dramatically across the sky
     const slLerp = 1 - Math.exp(-3.6 * dt);
@@ -2135,12 +2731,11 @@ export function buildBiomeWorld(biome: MapBiome): BiomeWorldHandle {
       const h = searchlightHeads[i];
       let lockedTarget: SearchlightTargetPoint | null = null;
       if (hasTargets && searchTargets) {
-        // Assign each tower a distinct nearby target when multiple exist, else lock onto nearest target within 52m
         let bestScore = Infinity;
         for (let tIdx = 0; tIdx < searchTargets.length; tIdx++) {
           const tgt = searchTargets[tIdx];
           const d = Math.hypot(tgt.x - h.wx, tgt.z - h.wz);
-          if (d > 54) continue;
+          if (d > 68) continue;
           const diversityBias = tIdx % searchlightHeads.length === i ? 0.68 : 1.0;
           const score = d * diversityBias;
           if (score < bestScore) {
@@ -2155,7 +2750,7 @@ export function buildBiomeWorld(biome: MapBiome): BiomeWorldHandle {
         _slGoalQuat.setFromUnitVectors(_slUpVec, _slTargetVec);
         h.pivot.quaternion.slerp(_slGoalQuat, slLerp);
       } else {
-        const sweepSpeed = h.speed * (1 + nf * 0.45);
+        const sweepSpeed = h.speed * (1 + nf * 0.45 + al * 0.25);
         const sweepYaw = h.baseYaw + Math.sin(timeSec * sweepSpeed + h.phase) * 0.92;
         const sweepTilt = 0.34 + Math.sin(timeSec * (sweepSpeed * 0.65) + h.phase * 1.4) * 0.22;
         _slSweepEuler.set(0, sweepYaw, sweepTilt);
@@ -2164,13 +2759,41 @@ export function buildBiomeWorld(biome: MapBiome): BiomeWorldHandle {
       }
     }
 
-    // Rotate landmark radar dishes (Outpost / Frigate / Corvette / Desert ATC)
+    // Rotate landmark radar dishes & Alpine mountain wind turbines
     for (let i = 0; i < landmarks.spinners.length; i++) {
-      landmarks.spinners[i].obj.rotation.y += dt * landmarks.spinners[i].speed;
+      const sp = landmarks.spinners[i];
+      const axis = sp.axis ?? 'y';
+      sp.obj.rotation[axis] += dt * sp.speed;
     }
 
-    // Blink aviation warning strobes (Radio Mast & Harbor Crane)
-    const strobeOn = Math.sin(timeSec * 4.2) > 0.15;
+    // Coastal Actively Cruising Offshore Patrol Corvette + Harbor Gantry Crane Trolley
+    if (landmarks.patrolBoat) {
+      const pb = landmarks.patrolBoat;
+      const t = timeSec * 0.18;
+      const px = pb.centerX + Math.cos(t) * pb.rx;
+      const pz = pb.centerZ + Math.sin(t) * pb.rz;
+      const vx = -Math.sin(t) * pb.rx;
+      const vz = Math.cos(t) * pb.rz;
+      pb.vessel.position.set(px, pb.baseY + Math.sin(timeSec * 1.7) * 0.12, pz);
+      pb.vessel.rotation.y = Math.atan2(vx, vz);
+      pb.vessel.rotation.z = Math.sin(timeSec * 1.3) * 0.04;
+    }
+    if (landmarks.craneTrolley) {
+      landmarks.craneTrolley.obj.position.x = landmarks.craneTrolley.baseX + Math.sin(timeSec * 0.45) * 1.65;
+    }
+
+    // Desert Sequential Strobing Runway Approach "Rabbit" Lights
+    if (landmarks.runwayApproachMats && landmarks.runwayApproachMats.length > 0) {
+      const count = landmarks.runwayApproachMats.length;
+      const activeIdx = Math.floor(timeSec * 6.5) % count;
+      for (let i = 0; i < count; i++) {
+        landmarks.runwayApproachMats[i].color.setHex(i === activeIdx ? 0xfef9c3 : 0xb45309);
+      }
+    }
+
+    // Blink aviation warning strobes (faster during high alert / boss raids!)
+    const strobeRate = 4.2 + al * 5.0;
+    const strobeOn = Math.sin(timeSec * strobeRate) > 0.15;
     for (let i = 0; i < allBlinking.length; i++) {
       allBlinking[i].color.setHex(strobeOn ? 0xff2a55 : 0x450a18);
     }

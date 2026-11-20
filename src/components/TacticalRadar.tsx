@@ -7,7 +7,7 @@ interface TacticalRadarProps {
 }
 
 const RADAR_SIZE = 112;
-const WORLD_RADIUS = 74;
+const WORLD_RADIUS = 92;
 
 /**
  * Lightweight 15 FPS Direct-Canvas Tactical Air-Defense Radar.
@@ -116,7 +116,23 @@ export const TacticalRadar: React.FC<TacticalRadarProps> = ({ snapshotRef }) => 
         const px = cx + (b.x / WORLD_RADIUS) * r;
         const pz = cy + (b.z / WORLD_RADIUS) * r;
 
-        if (b.kind === 'tower') {
+        if (b.kind === 'high_ground') {
+          ctx.strokeStyle = 'rgba(34, 211, 238, 0.52)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(px, pz - 3.0);
+          ctx.lineTo(px + 3.0, pz);
+          ctx.lineTo(px, pz + 3.0);
+          ctx.lineTo(px - 3.0, pz);
+          ctx.closePath();
+          ctx.stroke();
+        } else if (b.kind === 'convoy') {
+          ctx.fillStyle = '#34d399';
+          ctx.fillRect(px - 2.6, pz - 2.0, 5.2, 4.0);
+          ctx.strokeStyle = '#fef08a';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(px - 2.6, pz - 2.0, 5.2, 4.0);
+        } else if (b.kind === 'tower') {
           ctx.fillStyle = '#38bdf8';
           ctx.fillRect(px - 1.6, pz - 1.6, 3.2, 3.2);
         } else if (b.kind === 'radar_tower') {

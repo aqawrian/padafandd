@@ -17,7 +17,7 @@ export interface TowerRig {
   muzzleAnchors: THREE.Object3D[];
   applyLevel: (level: number) => void;
   triggerRecoil: () => void;
-  updateAnim: (dt: number, timeSec: number, isFiring: boolean) => void;
+  updateAnim: (dt: number, timeSec: number, isFiring: boolean, hasLock?: boolean) => void;
 }
 
 export interface EnemyRig {
@@ -28,7 +28,7 @@ export interface EnemyRig {
 
 export interface BunkerRig {
   group: THREE.Group;
-  updateAnim: (dt: number, timeSec: number, hpRatio?: number, shieldTimer?: number) => void;
+  updateAnim: (dt: number, timeSec: number, hpRatio?: number, shieldTimer?: number, alertLevel?: number) => void;
 }
 
 // =========================================================================
@@ -297,7 +297,7 @@ function buildRotaryBarrelCluster(gunmetalMat: THREE.Material, clampMat: THREE.M
 }
 
 // Main Defense Tower 3D Builder (7 unique military designs + Lv1/Lv2/Lv3 visual hardware evolution)
-export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
+export function buildTower3D(tower: DefenseTower, initialLevel = 1, playDeployAnim = false): TowerRig {
   const group = new THREE.Group();
   const baseMat = getArmorMat(tower.color, 0.48, 0.36);
   const darkArmorMat = getArmorMat(0x242c36, 0.52, 0.5);
@@ -319,9 +319,14 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
 
   const firePoints: THREE.Vector3[] = [];
   const muzzleAnchors: THREE.Object3D[] = [];
-  const spinners: { obj: THREE.Object3D; axis: 'x' | 'y' | 'z'; baseSpeed: number; fireSpeed: number }[] = [];
+  const spinners: { obj: THREE.Object3D; axis: 'x' | 'y' | 'z'; baseSpeed: number; fireSpeed: number; curSpeed: number; inertial?: boolean }[] = [];
   const recoilParts: { obj: THREE.Object3D; restZ: number; kick: number }[] = [];
+  const altRecoilParts: { obj: THREE.Object3D; restZ: number; kick: number; val: number }[] = [];
+  const pitchKickParts: { obj: THREE.Object3D; restX: number; kick: number }[] = [];
+  const hatchPivots: { pivot: THREE.Object3D; axis: 'x' | 'z'; closedAngle: number; openAngle: number }[] = [];
+  const oscillators: { obj: THREE.Object3D; axis: 'x' | 'y'; base: number; amp: number; speed: number; phase: number }[] = [];
   const pulseMats: { mat: THREE.MeshStandardMaterial; base: number; boost: number }[] = [];
+  let barrelHeatMat: THREE.MeshStandardMaterial | null = null;
 
   const registerMuzzle = (parent: THREE.Object3D, x: number, y: number, z: number) => {
     const anchor = new THREE.Object3D();
@@ -401,8 +406,28 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
     rotary1.position.set(0, 0.02, 0.25);
     gunCradle.add(rotary1);
 
-    spinners.push({ obj: rotary1, axis: 'z', baseSpeed: 1.5, fireSpeed: 28 });
+    // Thermal barrel heat sleeve (glows cherry-orange during sustained bursts!)
+    barrelHeatMat = new THREE.MeshStandardMaterial({
+      color: 0x3f241c,
+      emissive: 0xff5a1f,
+      emissiveIntensity: 0.0,
+      roughness: 0.45,
+      metalness: 0.72,
+    });
+    const heatSleeve = new THREE.Mesh(
+      getSharedGeo('ciws_heat', () => {
+        const g = new THREE.CylinderGeometry(0.145, 0.145, 0.65, 8);
+        g.rotateX(Math.PI / 2);
+        return g;
+      }),
+      barrelHeatMat
+    );
+    heatSleeve.position.set(0, 0.02, 1.48);
+    gunCradle.add(heatSleeve);
+
+    spinners.push({ obj: rotary1, axis: 'z', baseSpeed: 1.2, fireSpeed: 32, curSpeed: 1.2, inertial: true });
     recoilParts.push({ obj: gunCradle, restZ: 0.35, kick: 0.22 });
+    oscillators.push({ obj: flirBox, axis: 'y', base: 0, amp: 0.26, speed: 1.8, phase: 0.4 });
     registerMuzzle(gunCradle, 0, 0.02, 1.98);
 
     // Level 2: Armored Gun Shield + Side Feed Chute + Sight
@@ -443,7 +468,7 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
     rotary2.position.set(0, 0.02, 0.22);
     sideCradle.add(rotary2);
     tier3Parts.push(sideCradle);
-    spinners.push({ obj: rotary2, axis: 'z', baseSpeed: 1.5, fireSpeed: -28 });
+    spinners.push({ obj: rotary2, axis: 'z', baseSpeed: -1.2, fireSpeed: -32, curSpeed: -1.2, inertial: true });
     recoilParts.push({ obj: sideCradle, restZ: 0.35, kick: 0.22 });
     registerMuzzle(sideCradle, 0, 0.02, 1.85);
 
@@ -455,7 +480,7 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
     topRadarBar.visible = false;
     turretHead.add(topRadarBar);
     tier3Parts.push(topRadarBar);
-    spinners.push({ obj: topRadarBar, axis: 'y', baseSpeed: 3.8, fireSpeed: 5.5 });
+    spinners.push({ obj: topRadarBar, axis: 'y', baseSpeed: 3.8, fireSpeed: 6.2, curSpeed: 3.8 });
   }
 
   // 2. PANTSIR POINT — Twin 30mm Autocannons + Flanking SAM Pods + Rotating Radar
@@ -519,7 +544,8 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
       brake.position.z = 1.35;
       cannonGroup.add(brake);
       turretHead.add(cannonGroup);
-      recoilParts.push({ obj: cannonGroup, restZ: 0.52, kick: 0.24 });
+      // Alternating left/right 30mm autocannon recoil kick!
+      altRecoilParts.push({ obj: cannonGroup, restZ: 0.52, kick: 0.26, val: 0 });
       registerMuzzle(cannonGroup, 0, 0, 1.46);
     }
 
@@ -557,7 +583,8 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
     panel.rotation.x = -0.15;
     radarMast.add(panel);
     turretHead.add(radarMast);
-    spinners.push({ obj: radarMast, axis: 'y', baseSpeed: 2.6, fireSpeed: 3.6 });
+    spinners.push({ obj: radarMast, axis: 'y', baseSpeed: 2.8, fireSpeed: 4.4, curSpeed: 2.8 });
+    oscillators.push({ obj: eoBall, axis: 'y', base: 0, amp: 0.35, speed: 2.4, phase: 1.1 });
 
     // Level 2: Outer Doubled Missile Banks
     for (const sx of [-1.18, 1.18]) {
@@ -628,6 +655,7 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
     rack.rotation.x = -0.58;
     turretHead.add(rack);
     recoilParts.push({ obj: rack, restZ: 0, kick: 0.25 });
+    pitchKickParts.push({ obj: rack, restX: -0.58, kick: 0.09 });
 
     const canBodyGeo = getSharedGeo('pat_can_b', () => new THREE.BoxGeometry(0.46, 0.46, 2.55));
     const canRibGeo = getSharedGeo('pat_can_r', () => new THREE.BoxGeometry(0.51, 0.51, 0.11));
@@ -644,9 +672,14 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
         rib.position.z = rz;
         can.add(rib);
       }
+      // Articulated hinged front canister lid that swings open on target lock/fire!
+      const hatchPivot = new THREE.Group();
+      hatchPivot.position.set(0, 0.19, 1.28);
       const hatch = new THREE.Mesh(canHatchGeo, hatchMat);
-      hatch.position.z = 1.28;
-      can.add(hatch);
+      hatch.position.set(0, -0.19, 0);
+      hatchPivot.add(hatch);
+      can.add(hatchPivot);
+      hatchPivots.push({ pivot: hatchPivot, axis: 'x', closedAngle: 0, openAngle: -1.32 });
       return can;
     };
 
@@ -731,6 +764,8 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
     railCradle.rotation.x = -0.42;
     turretHead.add(railCradle);
     recoilParts.push({ obj: railCradle, restZ: 0, kick: 0.2 });
+    pitchKickParts.push({ obj: railCradle, restX: -0.42, kick: 0.08 });
+    oscillators.push({ obj: guideDish, axis: 'y', base: 0, amp: 0.32, speed: 2.1, phase: 0.7 });
 
     const railGeo = getSharedGeo('s358_rail', () => new THREE.BoxGeometry(0.1, 0.12, 2.2));
     const mBodyGeo = getSharedGeo('s358_mb', () => {
@@ -873,6 +908,9 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
     turretHead.add(podL, podR);
     recoilParts.push({ obj: podL, restZ: 0.1, kick: 0.14 });
     recoilParts.push({ obj: podR, restZ: 0.1, kick: 0.14 });
+    pitchKickParts.push({ obj: podL, restX: -0.2, kick: 0.1 });
+    pitchKickParts.push({ obj: podR, restX: -0.2, kick: 0.1 });
+    oscillators.push({ obj: flirPod, axis: 'y', base: 0, amp: 0.38, speed: 2.2, phase: 1.9 });
     registerMuzzle(podL, 0, 0, 0.92);
     registerMuzzle(podR, 0, 0, 0.92);
 
@@ -949,6 +987,8 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
     podCradle.rotation.x = -0.52;
     turretHead.add(podCradle);
     recoilParts.push({ obj: podCradle, restZ: -0.05, kick: 0.18 });
+    pitchKickParts.push({ obj: podCradle, restX: -0.52, kick: 0.11 });
+    oscillators.push({ obj: trackerSphere, axis: 'y', base: 0, amp: 0.42, speed: 2.5, phase: 2.3 });
 
     const podShell = new THREE.Mesh(
       getSharedGeo('id_shell', () => new THREE.BoxGeometry(1.52, 1.06, 1.86)),
@@ -1087,6 +1127,7 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
     erector.rotation.x = -0.16;
     turretHead.add(erector);
     recoilParts.push({ obj: erector, restZ: -0.36, kick: 0.16 });
+    pitchKickParts.push({ obj: erector, restX: -0.16, kick: 0.08 });
 
     const tubeGeo = getSharedGeo('s400_tube', () => new THREE.CylinderGeometry(0.24, 0.26, 2.95, 10));
     const bandGeo = getSharedGeo('s400_band', () => new THREE.CylinderGeometry(0.275, 0.275, 0.14, 10));
@@ -1103,9 +1144,14 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
         band.position.y = ry;
         c.add(band);
       }
+      // Articulated hinged vertical cold-launch tube lid (flips open when tracking strategic targets!)
+      const capPivot = new THREE.Group();
+      capPivot.position.set(0, 1.48, -0.22);
       const cap = new THREE.Mesh(capGeo, capMat);
-      cap.position.y = 1.5;
-      c.add(cap);
+      cap.position.set(0, 0.02, 0.22);
+      capPivot.add(cap);
+      c.add(capPivot);
+      hatchPivots.push({ pivot: capPivot, axis: 'x', closedAngle: 0, openAngle: -1.45 });
       return c;
     };
 
@@ -1147,7 +1193,7 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
     fcRadar.add(fcPanel);
     turretHead.add(fcRadar);
     tier2Parts.push(fcRadar);
-    spinners.push({ obj: fcRadar, axis: 'y', baseSpeed: 2.2, fireSpeed: 3.4 });
+    spinners.push({ obj: fcRadar, axis: 'y', baseSpeed: 2.2, fireSpeed: 4.2, curSpeed: 2.2 });
 
     // Level 3: Full 8-Tube Strategic Battery + Gold Command Gantry & Telemetry Radome
     for (const tx of [-0.88, 0.88]) {
@@ -1267,9 +1313,54 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
     topBeacon.visible = false;
     turretHead.add(topBeacon);
     tier3Parts.push(topBeacon);
+
+    // Translucent 3D Holographic Surveillance Radar Sweep Wedge projected from dish!
+    const sweepConeGeo = getSharedGeo('rad_sweep_wedge', () => {
+      const g = new THREE.ConeGeometry(2.6, 7.2, 6, 1, true);
+      g.translate(0, -3.6, 0);
+      g.rotateX(-Math.PI / 2);
+      return g;
+    });
+    const sweepMat = getSharedMat('rad_sweep_mat', () =>
+      new THREE.MeshBasicMaterial({
+        color: 0xfbbf24,
+        transparent: true,
+        opacity: 0.14,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    );
+    const sweepWedge = new THREE.Mesh(sweepConeGeo, sweepMat);
+    sweepWedge.position.set(0, 0.35, 0.65);
+    turretHead.add(sweepWedge);
+    spinners.push({ obj: upperArray, axis: 'y', baseSpeed: -2.4, fireSpeed: -3.2, curSpeed: -2.4 });
   }
 
   let recoilVal = 0;
+  let altCursor = 0;
+  let hatchOpenFactor = 0;
+  let barrelHeat = 0;
+  const restHeadY = turretHead.position.y;
+  let deployProgress = playDeployAnim ? 0 : 1;
+
+  const TOWER_SCALES: Record<string, number> = {
+    s400_thaad: 0.78,
+    patriot_battery: 0.76,
+    radar_uplink: 0.78,
+    pantsir_point: 0.8,
+    system_358: 0.8,
+    iron_dome_pod: 0.82,
+    avenger_stinger: 0.84,
+    ciws_light: 0.84,
+  };
+  const targetScale = TOWER_SCALES[tower.id] ?? 0.82;
+  if (playDeployAnim) {
+    group.scale.set(targetScale * 0.7, targetScale * 0.14, targetScale * 0.7);
+    turretHead.position.y = restHeadY - 0.85;
+  } else {
+    group.scale.setScalar(targetScale);
+  }
 
   const applyLevel = (level: number) => {
     tier2Parts.forEach((p) => {
@@ -1297,42 +1388,97 @@ export function buildTower3D(tower: DefenseTower, initialLevel = 1): TowerRig {
 
   const triggerRecoil = () => {
     recoilVal = 1.0;
+    if (altRecoilParts.length > 0) {
+      altRecoilParts[altCursor % altRecoilParts.length].val = 1.0;
+      altCursor = (altCursor + 1) % altRecoilParts.length;
+    }
+    if (barrelHeatMat) {
+      barrelHeat = Math.min(1.0, barrelHeat + 0.14);
+    }
   };
 
-  const updateAnim = (dt: number, timeSec: number, isFiring: boolean) => {
+  const updateAnim = (dt: number, timeSec: number, isFiring: boolean, hasLock = isFiring) => {
+    // 1. Hydraulic Deployment Construction Unfold Animation (~0.52s ease-out spring)
+    if (deployProgress < 1) {
+      deployProgress = Math.min(1, deployProgress + dt / 0.52);
+      const ease = 1 - Math.pow(1 - deployProgress, 3);
+      const xz = targetScale * (0.7 + 0.3 * ease);
+      const yy = targetScale * (0.14 + 0.86 * ease);
+      group.scale.set(xz, yy, xz);
+      turretHead.position.y = restHeadY - (1 - ease) * 0.85;
+    }
+
+    // 2. Standard Recoil & Pitch Kickback
     if (recoilVal > 0.001) {
-      recoilVal = Math.max(0, recoilVal - dt * 6.5);
+      recoilVal = Math.max(0, recoilVal - dt * 6.2);
       for (let i = 0; i < recoilParts.length; i++) {
         const rp = recoilParts[i];
         rp.obj.position.z = rp.restZ - recoilVal * rp.kick;
       }
+      for (let i = 0; i < pitchKickParts.length; i++) {
+        const pk = pitchKickParts[i];
+        pk.obj.rotation.x = pk.restX - recoilVal * pk.kick;
+      }
     }
 
+    // 3. Alternating Twin-Barrel Recoil (Pantsir 30mm Autocannons)
+    for (let i = 0; i < altRecoilParts.length; i++) {
+      const ar = altRecoilParts[i];
+      if (ar.val > 0.001) {
+        ar.val = Math.max(0, ar.val - dt * 8.5);
+        ar.obj.position.z = ar.restZ - ar.val * ar.kick;
+      }
+    }
+
+    // 4. Articulated Canister Launch Hatches (S-400 & Patriot open on target lock, seal shut when idle)
+    if (hatchPivots.length > 0) {
+      const goalHatch = isFiring || hasLock ? 1 : 0;
+      const rate = goalHatch > hatchOpenFactor ? 5.2 : 2.1;
+      hatchOpenFactor += (goalHatch - hatchOpenFactor) * Math.min(1, dt * rate);
+      for (let i = 0; i < hatchPivots.length; i++) {
+        const hp = hatchPivots[i];
+        hp.pivot.rotation[hp.axis] = hp.closedAngle + (hp.openAngle - hp.closedAngle) * hatchOpenFactor;
+      }
+    }
+
+    // 5. Inertial Gatling Spinners & Continuous Radar Arrays
     for (let i = 0; i < spinners.length; i++) {
       const sp = spinners[i];
       if (!sp.obj.visible) continue;
-      const spd = isFiring ? sp.fireSpeed : sp.baseSpeed;
-      sp.obj.rotation[sp.axis] += dt * spd;
+      const goalSpd = isFiring ? sp.fireSpeed : sp.baseSpeed;
+      if (sp.inertial) {
+        const accel = isFiring ? 7.5 : 2.6;
+        sp.curSpeed += (goalSpd - sp.curSpeed) * Math.min(1, dt * accel);
+      } else {
+        sp.curSpeed = goalSpd;
+      }
+      sp.obj.rotation[sp.axis] += dt * sp.curSpeed;
     }
 
+    // 6. CIWS Thermal Barrel Heat Glow Decay
+    if (barrelHeatMat) {
+      if (isFiring) {
+        barrelHeat = Math.min(1.0, barrelHeat + dt * 0.42);
+      } else {
+        barrelHeat = Math.max(0, barrelHeat - dt * 0.28);
+      }
+      barrelHeatMat.emissiveIntensity = barrelHeat * 2.15;
+    }
+
+    // 7. Active Optical Sensor & Tracker Micro-Scanning
+    for (let i = 0; i < oscillators.length; i++) {
+      const osc = oscillators[i];
+      const amp = isFiring ? osc.amp * 0.18 : osc.amp;
+      osc.obj.rotation[osc.axis] = osc.base + Math.sin(timeSec * osc.speed + osc.phase) * amp;
+    }
+
+    // 8. Emissive Pulse Materials
     for (let i = 0; i < pulseMats.length; i++) {
       const pm = pulseMats[i];
       const wave = 0.5 + 0.5 * Math.sin(timeSec * (isFiring ? 18 : 4));
       pm.mat.emissiveIntensity = isFiring ? pm.boost * (0.8 + 0.3 * wave) : pm.base * (0.85 + 0.25 * wave);
     }
   };
-
-  const TOWER_SCALES: Record<string, number> = {
-    s400_thaad: 0.78,
-    patriot_battery: 0.76,
-    radar_uplink: 0.78,
-    pantsir_point: 0.8,
-    system_358: 0.8,
-    iron_dome_pod: 0.82,
-    avenger_stinger: 0.84,
-    ciws_light: 0.84,
-  };
-  group.scale.setScalar(TOWER_SCALES[tower.id] ?? 0.82);
 
   return {
     group,
@@ -2309,12 +2455,49 @@ export function buildBaseBunker3D(): BunkerRig {
   shieldDome.visible = false;
   baseGroup.add(shieldDome);
 
-  const updateAnim = (dt: number, timeSec: number, hpRatio = 1, shieldTimer = 0) => {
-    hqRadarPivot.rotation.y += dt * 1.45;
+  // Twin rooftop armored ventilation cooling fans + oscillating tactical satcom dish
+  const hqFans: THREE.Object3D[] = [];
+  const fanHousingGeo = getSharedGeo('hq_fan_h', () => new THREE.CylinderGeometry(0.32, 0.34, 0.14, 8));
+  const fanBladeGeo = getSharedGeo('hq_fan_b', () => new THREE.BoxGeometry(0.48, 0.04, 0.09));
+  for (const [fx, fz] of [
+    [-1.45, -0.78],
+    [-1.45, 0.78],
+  ] as [number, number][]) {
+    const housing = new THREE.Mesh(fanHousingGeo, gunmetalMat);
+    housing.position.set(fx, 1.94, fz);
+    baseGroup.add(housing);
+    const rotor = new THREE.Group();
+    rotor.position.set(fx, 2.02, fz);
+    const b1 = new THREE.Mesh(fanBladeGeo, concreteMat);
+    const b2 = new THREE.Mesh(fanBladeGeo, concreteMat);
+    b2.rotation.y = Math.PI / 2;
+    rotor.add(b1, b2);
+    baseGroup.add(rotor);
+    hqFans.push(rotor);
+  }
+
+  const satcomPivot = new THREE.Group();
+  satcomPivot.position.set(1.5, 2.02, -0.82);
+  const satDish = new THREE.Mesh(
+    getSharedGeo('hq_sat', () => new THREE.CylinderGeometry(0.46, 0.16, 0.18, 8)),
+    domeMat
+  );
+  satDish.rotation.x = Math.PI / 3;
+  satDish.position.y = 0.25;
+  satcomPivot.add(satDish);
+  baseGroup.add(satcomPivot);
+
+  const updateAnim = (dt: number, timeSec: number, hpRatio = 1, shieldTimer = 0, alertLevel = 0) => {
+    hqRadarPivot.rotation.y += dt * (1.45 + alertLevel * 1.15);
+    satcomPivot.rotation.y = Math.sin(timeSec * 0.75) * 0.65;
+    for (let i = 0; i < hqFans.length; i++) {
+      hqFans[i].rotation.y += dt * (7.5 + i * 1.5);
+    }
+
     const critical = hpRatio < 0.35;
     const damaged = hpRatio < 0.65;
-    const pulseRate = critical ? 11.0 : damaged ? 7.0 : 4.5;
-    beaconMat.emissiveIntensity = 1.1 + 1.6 * (0.5 + 0.5 * Math.sin(timeSec * pulseRate));
+    const pulseRate = critical ? 11.0 : alertLevel > 0.5 ? 8.5 : damaged ? 7.0 : 4.5;
+    beaconMat.emissiveIntensity = (1.1 + alertLevel * 0.9) + 1.6 * (0.5 + 0.5 * Math.sin(timeSec * pulseRate));
 
     if (damaged) {
       damageRing.visible = true;
@@ -2544,6 +2727,7 @@ export function buildSecondaryFacility3D(kind: FacilityKind, maxHp: number): Sec
   group.add(apron);
 
   let beaconMat: THREE.MeshStandardMaterial | null = null;
+  const spinParts: THREE.Object3D[] = [];
 
   if (kind === 'ammo_bunker') {
     // 1. Reinforced half-cylinder concrete arch roof
@@ -2594,13 +2778,23 @@ export function buildSecondaryFacility3D(kind: FacilityKind, maxHp: number): Sec
       intactGroup.add(sb);
     }
 
-    // 5. Roof armored vent hood & status beacon
+    // 5. Roof armored vent hood with spinning cooling fan & status beacon
     const vent = new THREE.Mesh(
       getSharedGeo('fac_bk_vent', () => new THREE.BoxGeometry(0.68, 0.34, 0.68)),
       steelMat
     );
     vent.position.set(-0.55, 1.76, -0.35);
     intactGroup.add(vent);
+
+    const facFan = new THREE.Group();
+    facFan.position.set(-0.55, 1.96, -0.35);
+    const fbGeo = getSharedGeo('fac_fan_b', () => new THREE.BoxGeometry(0.48, 0.04, 0.08));
+    const fb1 = new THREE.Mesh(fbGeo, hazardMat);
+    const fb2 = new THREE.Mesh(fbGeo, hazardMat);
+    fb2.rotation.y = Math.PI / 2;
+    facFan.add(fb1, fb2);
+    intactGroup.add(facFan);
+    spinParts.push(facFan);
 
     beaconMat = new THREE.MeshStandardMaterial({
       color: 0x34d399,
@@ -2704,6 +2898,17 @@ export function buildSecondaryFacility3D(kind: FacilityKind, maxHp: number): Sec
     beacon.position.set(1.48, 1.72, 0);
     intactGroup.add(beacon);
 
+    // Spinning cooling turbine fan on top of transformer substation
+    const fuelFan = new THREE.Group();
+    fuelFan.position.set(1.48, 1.6, -0.58);
+    const ffbGeo = getSharedGeo('fac_fan_b', () => new THREE.BoxGeometry(0.48, 0.04, 0.08));
+    const ffb1 = new THREE.Mesh(ffbGeo, hazardMat);
+    const ffb2 = new THREE.Mesh(ffbGeo, hazardMat);
+    ffb2.rotation.y = Math.PI / 2;
+    fuelFan.add(ffb1, ffb2);
+    intactGroup.add(fuelFan);
+    spinParts.push(fuelFan);
+
     // Ruined Fuel Depot Sub-group
     const scorchedTank = new THREE.Mesh(
       getSharedGeo('fac_fl_rt', () => {
@@ -2739,11 +2944,16 @@ export function buildSecondaryFacility3D(kind: FacilityKind, maxHp: number): Sec
   };
 
   const updateAnim = (timeSec: number, cameraQuat?: THREE.Quaternion) => {
-    if (!destroyed && beaconMat) {
-      beaconMat.emissiveIntensity = 1.0 + 0.85 * (0.5 + 0.5 * Math.sin(timeSec * 3.8));
-    }
-    if (!destroyed && cameraQuat) {
-      healthBar.mesh.quaternion.copy(cameraQuat);
+    if (!destroyed) {
+      if (beaconMat) {
+        beaconMat.emissiveIntensity = 1.0 + 0.85 * (0.5 + 0.5 * Math.sin(timeSec * 3.8));
+      }
+      for (let i = 0; i < spinParts.length; i++) {
+        spinParts[i].rotation.y = timeSec * (6.2 + i * 1.4);
+      }
+      if (cameraQuat) {
+        healthBar.mesh.quaternion.copy(cameraQuat);
+      }
     }
   };
 

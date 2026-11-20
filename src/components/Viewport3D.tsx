@@ -8,6 +8,7 @@ import {
   ActiveEnemy,
   ActiveTower,
   BaseFacilityStatus,
+  ConvoyStatus,
   DefeatReason,
   FlightDoctrine,
   GameMode,
@@ -37,10 +38,15 @@ import {
 import {
   BIOME_CONFIGS,
   BiomeWorldHandle,
+  ConvoyTruckRig,
   SearchlightTargetPoint,
   buildBiomeWorld,
+  buildConvoyTruck3D,
   disposeObject3D,
+  findHighGroundPad,
+  getConvoyWaypoints,
   getGroundHeight,
+  getHighGroundPads,
   isBuildableSpot,
 } from '../utils/mapBuilder';
 import { generateEndlessWave } from '../data/techAndSave';
@@ -406,6 +412,14 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   const [facilities, setFacilities] = useState<BaseFacilityStatus[]>([]);
   const [defeatReason, setDefeatReason] = useState<DefeatReason>('hq_destroyed');
   const [tacticalAlert, setTacticalAlert] = useState<string | null>(null);
+  const [hoveringHighGround, setHoveringHighGround] = useState(false);
+  const [convoyStatus, setConvoyStatus] = useState<ConvoyStatus>({
+    active: false,
+    hp: 0,
+    maxHp: 240,
+    progress: 0,
+    reward: 60,
+  });
 
   // Tower Building & Selection State
   const [selectedTowerToBuild, setSelectedTowerToBuild] = useState<DefenseTower | null>(null);
@@ -506,7 +520,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   } | null>(null);
 
   const alertTimeoutRef = useRef<number | null>(null);
-  const pushTacticalAlert = useCallback((msg: string) => {
+  const pushTacticalAlert = useCallback((msg: string, durationMs = 3600) => {
     setTacticalAlert(msg);
     if (alertTimeoutRef.current !== null) {
       window.clearTimeout(alertTimeoutRef.current);
@@ -514,7 +528,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     alertTimeoutRef.current = window.setTimeout(() => {
       setTacticalAlert(null);
       alertTimeoutRef.current = null;
-    }, 3600);
+    }, durationMs);
   }, []);
 
   const activeFacilitiesRef = useRef<
@@ -603,21 +617,60 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   const placementValidRef = useRef<boolean>(false);
   const ghostPosRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
 
+  // Live Escorted Supply Convoy state ref (zero GC per frame)
+  const convoyRef = useRef<{
+    active: boolean;
+    rig: ConvoyTruckRig | null;
+    healthBar: { mesh: THREE.Object3D; updateHp: (current: number, maxOverride?: number) => void } | null;
+    waypoints: { x: number; z: number }[];
+    segIdx: number;
+    segProgress: number;
+    totalDist: number;
+    traveledDist: number;
+    x: number;
+    y: number;
+    z: number;
+    hp: number;
+    maxHp: number;
+    reward: number;
+    lastSmokeTime: number;
+    lastHudSync: number;
+  }>({
+    active: false,
+    rig: null,
+    healthBar: null,
+    waypoints: [],
+    segIdx: 0,
+    segProgress: 0,
+    totalDist: 1,
+    traveledDist: 0,
+    x: 0,
+    y: 0,
+    z: 0,
+    hp: 0,
+    maxHp: 240,
+    reward: 60,
+    lastSmokeTime: 0,
+    lastHudSync: 0,
+  });
+  const pendingConvoySpawnAtRef = useRef<number>(-1);
+  const hoveringHighGroundRef = useRef(false);
+
   // Pre-allocated 4 perimeter incoming sector chevrons
   const approachChevronsRef = useRef<THREE.Mesh[]>([]);
 
-  // Wide panoramic tactical camera with smooth exponential damping targets
+  // Wide panoramic tactical camera with smooth exponential damping targets (expanded for wider 340m map!)
   const cameraState = useRef({
     isDragging: false,
     dragMoved: false,
     previousMousePosition: { x: 0, y: 0 },
     target: new THREE.Vector3(0, 0, 0),
-    distance: 60,
-    pitch: 33 * (Math.PI / 180),
+    distance: 68,
+    pitch: 34 * (Math.PI / 180),
     yaw: 44 * (Math.PI / 180),
     transitioning: false,
-    goalDistance: 60,
-    goalPitch: 33 * (Math.PI / 180),
+    goalDistance: 68,
+    goalPitch: 34 * (Math.PI / 180),
     goalYaw: 44 * (Math.PI / 180),
   });
 
@@ -658,13 +711,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
     if (mode === 'isometric') {
       return {
-        distance: isShortLandscape ? (aspect > 2.0 ? 58 : 61) : 60,
-        pitch: (isShortLandscape ? 37 : 33) * (Math.PI / 180),
+        distance: isShortLandscape ? (aspect > 2.0 ? 64 : 68) : 68,
+        pitch: (isShortLandscape ? 38 : 34) * (Math.PI / 180),
         yaw: 44 * (Math.PI / 180),
       };
     }
     return {
-      distance: isShortLandscape ? (aspect > 2.0 ? 82 : 78) : 74,
+      distance: isShortLandscape ? (aspect > 2.0 ? 96 : 92) : 88,
       pitch: 82 * (Math.PI / 180),
       yaw: 0,
     };
@@ -682,7 +735,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   const handleZoomCamera = (delta: number) => {
     const cs = cameraState.current;
     const baseDist = cs.transitioning ? cs.goalDistance : cs.distance;
-    cs.goalDistance = Math.max(18, Math.min(115, baseDist + delta));
+    cs.goalDistance = Math.max(18, Math.min(134, baseDist + delta));
     cs.goalPitch = cs.pitch;
     cs.goalYaw = cs.yaw;
     cs.transitioning = true;
@@ -1271,9 +1324,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   };
 
   // Helper: Emit throttled floating kill bounty callout projected from 3D space
-  const pushKillCallout = (wx: number, wy: number, wz: number, reward: number, isBoss: boolean) => {
+  const pushKillCallout = (wx: number, wy: number, wz: number, reward: number | string, isBoss: boolean) => {
     const now = performance.now();
-    if (!isBoss && now - lastCalloutTimeRef.current < 360) return;
+    if (!isBoss && typeof reward === 'number' && now - lastCalloutTimeRef.current < 360) return;
     lastCalloutTimeRef.current = now;
 
     const camera = cameraRef.current;
@@ -1288,7 +1341,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     if (px < 20 || px > container.clientWidth - 20 || py < 40 || py > container.clientHeight - 40) return;
 
     const id = 'kc_' + Math.random().toString(36).substring(2, 8);
-    const text = isBoss ? `+$${reward} شکار باس!` : `+$${reward}`;
+    const text = typeof reward === 'string' ? reward : isBoss ? `+$${reward} شکار باس!` : `+$${reward}`;
     setKillCallouts((prev) => [...prev.slice(-4), { id, x: px, y: py, text, isBoss }]);
     window.setTimeout(() => {
       setKillCallouts((prev) => prev.filter((item) => item.id !== id));
@@ -1366,21 +1419,99 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     }
   };
 
-  // Helper: Place a detailed defense tower entity on the map with Tech Lab modifiers & structural HP
-  const placeTowerEntity = (config: DefenseTower, x: number, z: number, targetBiome: MapBiome) => {
+  // Helper: Clear any active supply convoy cleanly
+  const clearSupplyConvoy = useCallback(() => {
+    const c = convoyRef.current;
+    const scene = sceneRef.current;
+    if (c.rig && scene) {
+      scene.remove(c.rig.group);
+      disposeObject3D(c.rig.group);
+    }
+    c.active = false;
+    c.rig = null;
+    c.healthBar = null;
+    pendingConvoySpawnAtRef.current = -1;
+    setConvoyStatus((prev) => (prev.active ? { ...prev, active: false, hp: 0, progress: 0 } : prev));
+  }, []);
+
+  // Helper: Spawn an Escorted Armored Supply Convoy along the biome access road!
+  const spawnSupplyConvoy = useCallback((waveNum: number) => {
+    const scene = sceneRef.current;
+    if (!scene || convoyRef.current.active) return;
+
+    const activeBiome = biomeRef.current;
+    const waypoints = getConvoyWaypoints(activeBiome);
+    if (waypoints.length < 2) return;
+
+    let totalDist = 0;
+    for (let i = 0; i < waypoints.length - 1; i++) {
+      totalDist += Math.hypot(waypoints[i + 1].x - waypoints[i].x, waypoints[i + 1].z - waypoints[i].z);
+    }
+
+    const maxHp = 220 + waveNum * 25;
+    const reward = 55 + Math.min(25, waveNum * 5);
+    const rig = buildConvoyTruck3D(activeBiome);
+    const startPt = waypoints[0];
+    const startY = getGroundHeight(startPt.x, startPt.z, activeBiome);
+    rig.group.position.set(startPt.x, startY, startPt.z);
+    rig.group.rotation.y = Math.atan2(waypoints[1].x - startPt.x, waypoints[1].z - startPt.z);
+
+    const healthBar = createHealthBarBillboard(maxHp, 'small');
+    healthBar.mesh.position.set(0, 2.35, 0);
+    rig.group.add(healthBar.mesh);
+    scene.add(rig.group);
+
+    convoyRef.current = {
+      active: true,
+      rig,
+      healthBar,
+      waypoints,
+      segIdx: 0,
+      segProgress: 0,
+      totalDist: Math.max(1, totalDist),
+      traveledDist: 0,
+      x: startPt.x,
+      y: startY,
+      z: startPt.z,
+      hp: maxHp,
+      maxHp,
+      reward,
+      lastSmokeTime: 0,
+      lastHudSync: 0,
+    };
+
+    setConvoyStatus({ active: true, hp: maxHp, maxHp, progress: 0, reward });
+    soundManager.playRadarPing();
+    pushTacticalAlert(`کاروان تدارکاتی وارد مسیر شد — تا پایگاه محافظت کنید (+$${reward})`, 4600);
+  }, []);
+
+  // Helper: Place a detailed defense tower entity on the map with Tech Lab modifiers, High-Ground bonus & structural HP
+  const placeTowerEntity = (
+    config: DefenseTower,
+    x: number,
+    z: number,
+    targetBiome: MapBiome,
+    playDeployAnim = false
+  ) => {
     const scene = sceneRef.current;
     if (!scene) return;
 
     const mods = techModifiersRef.current;
+    const highGroundPad = findHighGroundPad(x, z, targetBiome, 2.8);
+    const highGround = Boolean(highGroundPad);
+    const highGroundRangeMult = highGround ? 1.15 : 1.0;
+
     const effectiveDamage = Math.round(config.damagePerShot * mods.damageMult);
-    const effectiveRange = Math.round(config.range * mods.rangeMult);
+    const effectiveRange = Math.round(config.range * mods.rangeMult * highGroundRangeMult);
     const armorBonusMult = 1 + Math.max(0, mods.maxBaseHp - 850) / 1900;
     const towerMaxHp = Math.round((config.maxHp ?? 170) * armorBonusMult);
 
     const instanceId = 'tower_' + Math.random().toString(36).substring(2, 9);
-    const gy = getGroundHeight(x, z, targetBiome);
-    const rig = buildTower3D(config, 1);
+    const gy = highGroundPad ? highGroundPad.elevation : getGroundHeight(x, z, targetBiome);
+    const rig = buildTower3D(config, 1, playDeployAnim);
     rig.group.position.set(x, gy, z);
+    // Orient initial outward defense azimuth cleanly
+    rig.turretHead.rotation.y = Math.atan2(x, z);
     scene.add(rig.group);
 
     // Floating structural HP bar (stays hidden until tower takes damage!)
@@ -1392,11 +1523,11 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     rig.group.add(healthBar.mesh);
 
     const isRadar = config.shape === 'radar_dish';
-    const ringRadius = isRadar ? getRadarCoverageRadius(1, mods.rangeMult) : effectiveRange * 0.12;
+    const ringRadius = isRadar ? getRadarCoverageRadius(1, mods.rangeMult * highGroundRangeMult) : effectiveRange * 0.12;
     const ringGeo = new THREE.RingGeometry(Math.max(0.5, ringRadius - (isRadar ? 0.22 : 0.14)), ringRadius, 64);
     ringGeo.rotateX(-Math.PI / 2);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(isRadar ? '#f59e0b' : config.color),
+      color: new THREE.Color(isRadar ? '#f59e0b' : highGround ? '#22d3ee' : config.color),
       transparent: true,
       opacity: isRadar ? 0.22 : 0.34,
       side: THREE.DoubleSide,
@@ -1421,11 +1552,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       fireRate: config.fireRate,
       lastFireTime: -10,
       targetEnemyId: null,
-      turretYaw: 0,
+      turretYaw: Math.atan2(x, z),
       turretPitch: 0,
       killCount: 0,
       targetingPriority: 'closest',
       radarBoosted: false,
+      highGround,
     };
 
     rig.group.userData = { instanceId, category: 'tower' };
@@ -1593,10 +1725,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     setRepairCooldownLeft(0);
     setCapCooldownLeft(0);
     setCapActiveLeft(0);
+    clearSupplyConvoy();
     setSelectedPlacedTower(null);
     setSelectedTowerToBuild(null);
+    setHoveringHighGround(false);
+    hoveringHighGroundRef.current = false;
     soundManager.setMusicMode('prep');
-  }, []);
+  }, [clearSupplyConvoy]);
 
   // Unlock adaptive Web Audio cleanly on first user gesture
   useEffect(() => {
@@ -1996,8 +2131,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     dirLight.shadow.mapSize.width = 1024;
     dirLight.shadow.mapSize.height = 1024;
     dirLight.shadow.camera.near = 2;
-    dirLight.shadow.camera.far = 165;
-    const d = 52;
+    dirLight.shadow.camera.far = 195;
+    const d = 62;
     dirLight.shadow.camera.left = -d;
     dirLight.shadow.camera.right = d;
     dirLight.shadow.camera.top = d;
@@ -2081,15 +2216,23 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         return false;
       }
 
-      const gx = Math.round(_hitPoint.x / 2) * 2;
-      const gz = Math.round(_hitPoint.z / 2) * 2;
-      const gy = getGroundHeight(gx, gz, biomeRef.current);
+      let gx = Math.round(_hitPoint.x / 2) * 2;
+      let gz = Math.round(_hitPoint.z / 2) * 2;
+
+      // Snap smoothly onto nearby Strategic High-Ground Pads so players can place on hills effortlessly!
+      const hgPad = findHighGroundPad(_hitPoint.x, _hitPoint.z, biomeRef.current, 3.6);
+      if (hgPad) {
+        gx = hgPad.x;
+        gz = hgPad.z;
+      }
+      const gy = hgPad ? hgPad.elevation : getGroundHeight(gx, gz, biomeRef.current);
 
       if (ghostGroupRef.current) {
         ghostGroupRef.current.position.set(gx, gy, gz);
       }
       if (ghostRangeRingRef.current) {
         ghostRangeRingRef.current.position.set(gx, gy + 0.16, gz);
+        ghostRangeRingRef.current.scale.setScalar(hgPad ? 1.15 : 1.0);
       }
       ghostPosRef.current.set(gx, gy, gz);
 
@@ -2110,7 +2253,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       const isValid = isBuildableSpot(gx, gz, biomeRef.current) && !collidesWithTower;
       placementValidRef.current = isValid;
 
-      const colorHex = isValid ? 0x10b981 : 0xef4444;
+      const onValidHighGround = Boolean(isValid && hgPad);
+      if (hoveringHighGroundRef.current !== onValidHighGround) {
+        hoveringHighGroundRef.current = onValidHighGround;
+        setHoveringHighGround(onValidHighGround);
+      }
+
+      const colorHex = !isValid ? 0xef4444 : hgPad ? 0x22d3ee : 0x10b981;
       if (ghostMatRef.current) {
         ghostMatRef.current.color.setHex(colorHex);
       }
@@ -2130,13 +2279,25 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         if (spotValid) {
           const gx = ghostPosRef.current.x;
           const gz = ghostPosRef.current.z;
+          const gy = ghostPosRef.current.y;
 
           if (cashRef.current >= pendingBuild.buildCost) {
             setCash((prev) => prev - pendingBuild.buildCost);
             soundManager.playBuild();
-            placeTowerEntity(pendingBuild, gx, gz, biomeRef.current);
-            spawnShockwaveRing(gx, getGroundHeight(gx, gz, biomeRef.current) + 0.3, gz, 0x38bdf8, 0.5, 3.2, 0.35);
+            placeTowerEntity(pendingBuild, gx, gz, biomeRef.current, true);
+            const builtOnHg = Boolean(findHighGroundPad(gx, gz, biomeRef.current, 2.8));
+            spawnShockwaveRing(gx, gy + 0.3, gz, builtOnHg ? 0x22d3ee : 0x38bdf8, 0.5, builtOnHg ? 4.2 : 3.2, 0.38);
+            // Deployment hydraulic ground dust burst
+            for (let dIdx = 0; dIdx < 4; dIdx++) {
+              const da = (dIdx / 4) * Math.PI * 2;
+              spawnSmokePuff(gx + Math.cos(da) * 0.9, gy + 0.35, gz + Math.sin(da) * 0.9, 0.28, 0.45);
+            }
+            if (builtOnHg) {
+              pushKillCallout(gx, gy + 2.4, gz, '+۱۵٪ برد سکوی مرتفع', false);
+            }
             setSelectedTowerToBuild(null);
+            hoveringHighGroundRef.current = false;
+            setHoveringHighGround(false);
           }
         }
         return;
@@ -2230,7 +2391,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       cameraState.current.transitioning = false;
-      cameraState.current.distance = Math.max(18, Math.min(112, cameraState.current.distance + e.deltaY * 0.055));
+      cameraState.current.distance = Math.max(18, Math.min(134, cameraState.current.distance + e.deltaY * 0.055));
       applyCameraTransform();
     };
 
@@ -2294,7 +2455,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           cameraState.current.transitioning = false;
           cameraState.current.distance = Math.max(
             18,
-            Math.min(115, cameraState.current.distance + deltaPinch * 0.16)
+            Math.min(134, cameraState.current.distance + deltaPinch * 0.16)
           );
           applyCameraTransform();
         }
@@ -3494,14 +3655,21 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         rimLight.intensity = bCfg.rimIntensity * (1 - nf * 0.35);
         sharedAssets.bulletMat.color.setHex(nf > 0.35 ? 0xfffbeb : 0xfef08a);
 
-        // Animate biome atmosphere, live weather, target-tracking AA searchlights & base glow
-        worldHandleRef.current?.update(visualTimeSec, dtRaw, nf, _searchTargetsBuf);
+        // Compute live tactical combat alert level (0 = calm, 0.55 = active raid, 1.0 = boss raid!)
+        const activeAlertLevel = waveHasBossRef.current && activeEnemiesRef.current.size > 0
+          ? 1.0
+          : activeEnemiesRef.current.size > 0 || isSpawningRef.current
+            ? 0.55
+            : 0.0;
+
+        // Animate biome atmosphere, live weather, helicopter rotors, ATC radar, patrol rover & target-tracking AA searchlights
+        worldHandleRef.current?.update(visualTimeSec, dtRaw, nf, _searchTargetsBuf, activeAlertLevel);
 
         if (bunkerShieldTimerRef.current > 0) {
           bunkerShieldTimerRef.current = Math.max(0, bunkerShieldTimerRef.current - dtRaw);
         }
         const hpRatio = baseHpRef.current / Math.max(1, maxBaseHpRef.current);
-        bunkerRigRef.current?.updateAnim(dtRaw, visualTimeSec, hpRatio, bunkerShieldTimerRef.current);
+        bunkerRigRef.current?.updateAnim(dtRaw, visualTimeSec, hpRatio, bunkerShieldTimerRef.current, activeAlertLevel);
 
         // Diegetic bunker damage smoke & embers when HQ is damaged
         if (hpRatio < 0.65 && !defeatTriggeredRef.current) {
@@ -3618,6 +3786,15 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                 blips.push({ x: ord.x, z: ord.z, kind: 'ordnance' });
               }
             }
+          }
+          // Show Strategic High-Ground Pads as subtle cyan diamonds on Tactical Radar
+          const hgPads = getHighGroundPads(biomeRef.current);
+          for (let hi = 0; hi < hgPads.length; hi++) {
+            blips.push({ x: hgPads[hi].x, z: hgPads[hi].z, kind: 'high_ground' });
+          }
+          // Show active escorted supply convoy on Tactical Radar
+          if (convoyRef.current.active) {
+            blips.push({ x: convoyRef.current.x, z: convoyRef.current.z, kind: 'convoy' });
           }
           for (let fi = 0; fi < capFightersRef.current.length; fi++) {
             const cf = capFightersRef.current[fi];
@@ -3858,7 +4035,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
               if (unitConfig) {
                 const chosenSector = activeSectors[Math.floor(Math.random() * activeSectors.length)];
                 const angle = COMPASS_ANGLES[chosenSector] + (Math.random() - 0.5) * 0.72;
-                const spawnDist = 62 + Math.random() * 10;
+                const spawnDist = 72 + Math.random() * 12;
                 const sx = Math.cos(angle) * spawnDist;
                 const sz = Math.sin(angle) * spawnDist;
                 const startAlt =
@@ -4406,6 +4583,102 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
             }
           }
 
+          // 3B. LIVE ESCORTED SUPPLY CONVOY UPDATE (spawns on even waves, drives along supply road to HQ!)
+          if (pendingConvoySpawnAtRef.current > 0 && simSec >= pendingConvoySpawnAtRef.current) {
+            pendingConvoySpawnAtRef.current = -1;
+            spawnSupplyConvoy(currentWaveIndexRef.current + 1);
+          }
+          const cState = convoyRef.current;
+          if (cState.active && cState.rig) {
+            const convoySpeed = 4.2;
+            const stepDist = convoySpeed * dt;
+            const pts = cState.waypoints;
+            const a = pts[cState.segIdx];
+            const b = pts[Math.min(pts.length - 1, cState.segIdx + 1)];
+            const segLen = Math.max(0.01, Math.hypot(b.x - a.x, b.z - a.z));
+            cState.segProgress += stepDist / segLen;
+            cState.traveledDist += stepDist;
+
+            while (cState.segProgress >= 1 && cState.segIdx < pts.length - 2) {
+              cState.segProgress -= 1;
+              cState.segIdx += 1;
+            }
+
+            const curA = pts[cState.segIdx];
+            const curB = pts[Math.min(pts.length - 1, cState.segIdx + 1)];
+            const tClamped = Math.min(1, cState.segProgress);
+            cState.x = curA.x + (curB.x - curA.x) * tClamped;
+            cState.z = curA.z + (curB.z - curA.z) * tClamped;
+            const activeBiome = biomeRef.current;
+            // Ride cleanly on bridge deck when crossing Alpine river
+            const onAlpineBridge =
+              activeBiome === 'alpine' && Math.abs(cState.x + 2.0) < 2.2 && Math.abs(cState.z - 20.5) < 6.4;
+            cState.y = onAlpineBridge ? 0.46 : getGroundHeight(cState.x, cState.z, activeBiome);
+
+            const heading = Math.atan2(curB.x - curA.x, curB.z - curA.z);
+            cState.rig.group.position.set(cState.x, cState.y, cState.z);
+            cState.rig.group.rotation.y = heading;
+            cState.rig.updateAnim(dt, visualTimeSec, convoySpeed, nightFactorRef.current);
+            if (cState.healthBar) {
+              cState.healthBar.mesh.quaternion.copy(camera.quaternion);
+            }
+
+            // Enemy raiders & falling ordnance passing right over the convoy strafe/damage it!
+            let convoyDmgThisTick = 0;
+            activeEnemiesRef.current.forEach(({ enemyState }) => {
+              if (!enemyState.alive) return;
+              const dConv = Math.hypot(enemyState.x - cState.x, enemyState.z - cState.z);
+              if (dConv < 4.5 && enemyState.y < 11.5) {
+                convoyDmgThisTick += 28 * dt;
+              }
+            });
+            for (let oi = 0; oi < pools.ordnances.length; oi++) {
+              const ord = pools.ordnances[oi];
+              if (!ord.active) continue;
+              if (ord.y < cState.y + 3.2 && Math.hypot(ord.x - cState.x, ord.z - cState.z) < 4.8) {
+                convoyDmgThisTick += 65;
+                ord.active = false;
+                ord.mesh.visible = false;
+                triggerExplosion(ord.x, ord.y, ord.z, 0.95);
+              }
+            }
+            if (convoyDmgThisTick > 0) {
+              cState.hp = Math.max(0, cState.hp - convoyDmgThisTick);
+              cState.healthBar?.updateHp(cState.hp, cState.maxHp);
+            }
+
+            if (cState.hp < cState.maxHp * 0.65 && visualTimeSec - cState.lastSmokeTime >= 0.42) {
+              cState.lastSmokeTime = visualTimeSec;
+              spawnSmokePuff(cState.x, cState.y + 1.45, cState.z, 0.25, 0.55);
+            }
+
+            const progressFrac = Math.min(1, cState.traveledDist / cState.totalDist);
+            if (cState.hp <= 0) {
+              // Convoy destroyed!
+              triggerExplosion(cState.x, cState.y + 0.9, cState.z, 1.35);
+              pushTacticalAlert('کاروان تدارکاتی منهدم شد!', 3200);
+              clearSupplyConvoy();
+            } else if (cState.segIdx >= pts.length - 2 && cState.segProgress >= 0.98) {
+              // Convoy reached HQ safely -> Bonus defense funds!
+              const bonus = cState.reward;
+              setCash((prev) => prev + bonus);
+              soundManager.playUpgrade(2);
+              spawnShockwaveRing(cState.x, cState.y + 0.4, cState.z, 0x34d399, 0.6, 5.8, 0.55);
+              pushKillCallout(cState.x, cState.y + 2.4, cState.z, `+$${bonus} تدارکات`, false);
+              pushTacticalAlert(`کاروان تدارکاتی به پایگاه رسید (+$${bonus})`, 3400);
+              clearSupplyConvoy();
+            } else if (currentTime - cState.lastHudSync > 220) {
+              cState.lastHudSync = currentTime;
+              setConvoyStatus({
+                active: true,
+                hp: Math.ceil(cState.hp),
+                maxHp: cState.maxHp,
+                progress: progressFrac,
+                reward: cState.reward,
+              });
+            }
+          }
+
           const overdriveMultiplier = simSec < overdriveUntilRef.current ? 1.35 : 1.0;
 
           // 4. TOWER COMBAT (REGIONAL RADAR LINK + ALTITUDE CEILINGS + S-400 STRATEGIC LOCK + POINT DEFENSE)
@@ -4456,8 +4729,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
             const localJamPenalty = stage.modifier === 'radar_jam' && !inRadarBubble ? 0.85 : 1.0;
             const baseRange = towerState.range * 0.12 * (inRadarBubble ? 1.35 : 1.0) * localJamPenalty;
 
-            // Realistic engagement altitude ceiling: CIWS defends low airspace & falling bombs, SAMs dominate high-altitude jets!
-            const maxEngageAlt =
+            // Realistic engagement altitude ceiling + High-Ground Strategic Pad (+2.5m altitude ceiling bonus!)
+            const baseAltCeiling =
               towerState.tower.id === 'ciws_light'
                 ? inRadarBubble
                   ? 13.0
@@ -4471,6 +4744,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
                       ? 19.6
                       : 17.2
                     : 36.0;
+            const maxEngageAlt = baseAltCeiling + (towerState.highGround ? 2.5 : 0);
 
             const strategicOnly = Boolean(towerState.tower.strategicTargetOnly);
 
@@ -4544,9 +4818,24 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
             }
 
             const hasTarget = Boolean(bestTarget) || bestOrdnanceIdx >= 0;
-            rig.updateAnim(dt, visualTimeSec, hasTarget);
+            const recentlyFired = simSec - towerState.lastFireTime < 0.35;
+            rig.updateAnim(dt, visualTimeSec, hasTarget || recentlyFired, hasTarget);
 
-            if (hasTarget) {
+            if (!hasTarget) {
+              // Active Idle Sector Scanning: turrets smoothly patrol their outward defense sector instead of freezing!
+              towerState.targetEnemyId = null;
+              const baseSectorYaw = Math.atan2(towerState.x, towerState.z);
+              const phaseSeed = (towerState.x * 0.37 + towerState.z * 0.53) % 6.28;
+              const scanSpeed = towerState.tower.shape === 's400_launcher' ? 0.32 : 0.68;
+              const scanArc = towerState.tower.shape === 's400_launcher' ? 0.35 : 0.85;
+              const goalYaw = baseSectorYaw + Math.sin(visualTimeSec * scanSpeed + phaseSeed) * scanArc;
+              let yawDiff = goalYaw - rig.turretHead.rotation.y;
+              while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
+              while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
+              rig.turretHead.rotation.y += yawDiff * Math.min(1, dt * 2.2);
+              rig.turretHead.rotation.x *= Math.max(0, 1 - dt * 3.0);
+              rig.turretHead.rotation.z *= Math.max(0, 1 - dt * 3.0);
+            } else {
               const ordTarget = bestOrdnanceIdx >= 0 ? pools.ordnances[bestOrdnanceIdx] : null;
               const enemyTarget = bestTarget as ActiveEnemy | null;
               const enemyEntryTarget = enemyTarget ? activeEnemiesRef.current.get(enemyTarget.instanceId) : undefined;
@@ -4996,6 +5285,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         disposeObject3D(f.rig.group);
       });
       capFightersRef.current = [];
+      if (convoyRef.current.rig) {
+        scene.remove(convoyRef.current.rig.group);
+        disposeObject3D(convoyRef.current.rig.group);
+        convoyRef.current.rig = null;
+        convoyRef.current.active = false;
+      }
 
       if (worldHandleRef.current) {
         worldHandleRef.current.dispose();
@@ -5079,11 +5374,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     activeTowersRef.current.forEach((entry) => {
       const { towerState, rangeMesh } = entry;
       const lvl = towerState.level;
+      const hgMult = towerState.highGround ? 1.15 : 1.0;
       towerState.damage = Math.round(towerState.tower.damagePerShot * Math.pow(1.45, lvl - 1) * techModifiers.damageMult);
-      towerState.range = Math.round(towerState.tower.range * Math.pow(1.18, lvl - 1) * techModifiers.rangeMult);
+      towerState.range = Math.round(towerState.tower.range * Math.pow(1.18, lvl - 1) * techModifiers.rangeMult * hgMult);
 
       const isRadar = towerState.tower.shape === 'radar_dish';
-      const newRadius = isRadar ? getRadarCoverageRadius(lvl, techModifiers.rangeMult) : towerState.range * 0.12;
+      const newRadius = isRadar ? getRadarCoverageRadius(lvl, techModifiers.rangeMult * hgMult) : towerState.range * 0.12;
       rangeMesh.geometry.dispose();
       const updatedRingGeo = new THREE.RingGeometry(Math.max(0.5, newRadius - (isRadar ? 0.22 : 0.14)), newRadius, 64);
       updatedRingGeo.rotateX(-Math.PI / 2);
@@ -5188,6 +5484,11 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     waveStartTimeRef.current = simCombatSecRef.current;
     waveHasBossRef.current = hasBossInWave;
     isSpawningRef.current = true;
+    // Schedule an Escorted Armored Supply Convoy on Wave 2, 4, 6... (3.2s after wave launch!)
+    const nextWaveNum = currentWaveIndex + 1;
+    if (nextWaveNum >= 2 && nextWaveNum % 2 === 0 && !convoyRef.current.active) {
+      pendingConvoySpawnAtRef.current = simCombatSecRef.current + 3.2;
+    }
     soundManager.playRadarPing();
     soundManager.setMusicMode(hasBossInWave ? 'boss' : 'combat');
   };
@@ -5309,8 +5610,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       entry.towerState.level += 1;
       const lvl = entry.towerState.level;
       const mods = techModifiersRef.current;
+      const hgMult = entry.towerState.highGround ? 1.15 : 1.0;
       entry.towerState.damage = Math.round(entry.towerState.tower.damagePerShot * Math.pow(1.45, lvl - 1) * mods.damageMult);
-      entry.towerState.range = Math.round(entry.towerState.tower.range * Math.pow(1.18, lvl - 1) * mods.rangeMult);
+      entry.towerState.range = Math.round(entry.towerState.tower.range * Math.pow(1.18, lvl - 1) * mods.rangeMult * hgMult);
 
       // Upgrading reinforces tower plating (+25% max HP) without acting as a free repair
       const prevMax = entry.towerState.maxHp;
@@ -5324,7 +5626,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       entry.rig.applyLevel(lvl);
 
       const isRadar = entry.towerState.tower.shape === 'radar_dish';
-      const newRadius = isRadar ? getRadarCoverageRadius(lvl, mods.rangeMult) : entry.towerState.range * 0.12;
+      const newRadius = isRadar ? getRadarCoverageRadius(lvl, mods.rangeMult * hgMult) : entry.towerState.range * 0.12;
       entry.rangeMesh.geometry.dispose();
       const updatedRingGeo = new THREE.RingGeometry(Math.max(0.5, newRadius - (isRadar ? 0.22 : 0.14)), newRadius, 64);
       updatedRingGeo.rotateX(-Math.PI / 2);
@@ -5440,6 +5742,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         onTriggerCap={handleTriggerCap}
         isNightRaid={isNightRaid}
         facilities={facilities}
+        convoyStatus={convoyStatus}
+        hoveringHighGround={hoveringHighGround}
         defeatReason={defeatReason}
         tacticalAlert={tacticalAlert}
         radarSnapshotRef={radarSnapshotRef}

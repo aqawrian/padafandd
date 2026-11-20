@@ -9,6 +9,7 @@ import {
   RadarSnapshot,
   BaseFacilityStatus,
   DefeatReason,
+  ConvoyStatus,
 } from '../types/game';
 import { DEFENSE_TOWERS, TOWER_TIER_META } from '../data/gameData';
 import { BIOME_CONFIGS } from '../utils/mapBuilder';
@@ -56,6 +57,7 @@ import {
   Compass,
   ShieldAlert,
   Fuel,
+  Truck,
 } from 'lucide-react';
 
 export interface KillCallout {
@@ -124,6 +126,8 @@ interface GameHudProps {
   facilities: BaseFacilityStatus[];
   defeatReason: DefeatReason;
   tacticalAlert: string | null;
+  convoyStatus: ConvoyStatus;
+  hoveringHighGround: boolean;
   radarSnapshotRef: React.MutableRefObject<RadarSnapshot>;
   killCallouts: KillCallout[];
 }
@@ -227,6 +231,8 @@ export const GameHud: React.FC<GameHudProps> = ({
   facilities,
   defeatReason,
   tacticalAlert,
+  convoyStatus,
+  hoveringHighGround,
   radarSnapshotRef,
   killCallouts,
 }) => {
@@ -749,6 +755,40 @@ export const GameHud: React.FC<GameHudProps> = ({
           </div>
         )}
 
+        {/* Live Armored Supply Convoy Escort Strip */}
+        {convoyStatus.active && (
+          <div
+            dir="rtl"
+            className="px-2.5 py-1 short:px-2 short:py-0.5 rounded-lg bg-[#09151a]/90 border border-emerald-400/40 text-[10px] short:text-[9px] text-emerald-100 flex items-center gap-2 short:gap-1.5 shadow-lg"
+          >
+            <Truck className="w-3.5 h-3.5 short:w-3 short:h-3 text-emerald-400 shrink-0" />
+            <span className="font-semibold text-emerald-200 whitespace-nowrap">
+              کاروان تدارکاتی
+            </span>
+            <div className="w-12 short:w-8 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-150 ${
+                  convoyStatus.hp / Math.max(1, convoyStatus.maxHp) > 0.55
+                    ? 'bg-emerald-400'
+                    : convoyStatus.hp / Math.max(1, convoyStatus.maxHp) > 0.28
+                      ? 'bg-amber-400'
+                      : 'bg-rose-500'
+                }`}
+                style={{
+                  width: `${Math.max(0, Math.min(100, (convoyStatus.hp / Math.max(1, convoyStatus.maxHp)) * 100))}%`,
+                }}
+              />
+            </div>
+            <span className="font-mono text-slate-300 tabular-nums whitespace-nowrap">
+              {Math.round(convoyStatus.progress * 100)}٪
+            </span>
+            <span className="w-px h-3 bg-white/10 shrink-0" aria-hidden="true" />
+            <span className="font-mono font-semibold text-amber-300 tabular-nums whitespace-nowrap">
+              +${convoyStatus.reward}
+            </span>
+          </div>
+        )}
+
         {/* Transient Tactical Alert Toast (Tower / Facility Destroyed, B-2 + 4 Escorts Arrival) */}
         {tacticalAlert && (
           <div
@@ -768,7 +808,9 @@ export const GameHud: React.FC<GameHudProps> = ({
           {selectedTowerToBuild && (
             <div
               dir="rtl"
-              className="pointer-events-auto flex items-center gap-2.5 px-3.5 py-1.5 short:px-2.5 short:py-1 rounded-xl bg-[#0a0f1c]/94 border border-amber-400/45 shadow-xl text-xs short:text-[11px]"
+              className={`pointer-events-auto flex items-center gap-2.5 px-3.5 py-1.5 short:px-2.5 short:py-1 rounded-xl bg-[#0a0f1c]/94 border shadow-xl text-xs short:text-[11px] transition-colors ${
+                hoveringHighGround ? 'border-cyan-400/75' : 'border-amber-400/45'
+              }`}
             >
               <span
                 className="w-2.5 h-2.5 rounded-full shrink-0"
@@ -777,6 +819,15 @@ export const GameHud: React.FC<GameHudProps> = ({
               <span className="text-slate-100 font-medium whitespace-nowrap">
                 محل <strong className="text-amber-300">{TOWER_SHORT_NAMES[selectedTowerToBuild.id] ?? selectedTowerToBuild.name}</strong> را لمس کنید
               </span>
+              {hoveringHighGround && (
+                <>
+                  <span className="w-px h-3.5 bg-cyan-400/30 shrink-0" aria-hidden="true" />
+                  <span className="flex items-center gap-1 text-cyan-300 font-semibold whitespace-nowrap">
+                    <Mountain className="w-3.5 h-3.5 shrink-0" />
+                    <span>سکوی مرتفع: +۱۵٪ برد و +۲.۵م ارتفاع</span>
+                  </span>
+                </>
+              )}
               <button
                 onClick={() => onSelectTowerToBuild(null)}
                 className="px-2.5 py-1 short:py-0.5 rounded-md bg-white/10 hover:bg-white/15 text-slate-200 hover:text-white transition-colors cursor-pointer"
@@ -838,12 +889,22 @@ export const GameHud: React.FC<GameHudProps> = ({
                   </>
                 )}
 
+                {selectedPlacedTower.highGround && (
+                  <>
+                    <span className="text-slate-600" aria-hidden="true">·</span>
+                    <span className="text-cyan-300 font-medium whitespace-nowrap flex items-center gap-1">
+                      <Mountain className="w-3 h-3 shrink-0" />
+                      <span>مرتفع +۱۵٪</span>
+                    </span>
+                  </>
+                )}
+
                 {selectedPlacedTower.tower.shape === 'radar_dish' ? (
                   <>
                     <span className="text-slate-600" aria-hidden="true">·</span>
                     <span className="text-amber-300 font-mono tabular-nums whitespace-nowrap flex items-center gap-1">
                       <Radio className="w-3 h-3" />
-                      <span>شعاع {selectedPlacedTower.level === 3 ? 39 : selectedPlacedTower.level === 2 ? 31 : 24}م</span>
+                      <span>شعاع {Math.round(selectedPlacedTower.effectiveRange)}م</span>
                     </span>
                   </>
                 ) : (

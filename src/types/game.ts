@@ -52,8 +52,27 @@ export interface SaveProfileV2 {
 export interface RadarEntityBlip {
   x: number;
   z: number;
-  kind: 'tower' | 'radar_tower' | 'facility' | 'ally_fighter' | 'enemy' | 'boss' | 'stealth' | 'jammer' | 'ordnance';
+  kind:
+    | 'tower'
+    | 'radar_tower'
+    | 'facility'
+    | 'ally_fighter'
+    | 'enemy'
+    | 'boss'
+    | 'stealth'
+    | 'jammer'
+    | 'ordnance'
+    | 'convoy'
+    | 'high_ground';
   color?: string;
+}
+
+export interface ConvoyStatus {
+  active: boolean;
+  hp: number;
+  maxHp: number;
+  progress: number; // 0..1
+  reward: number;
 }
 
 export type FacilityKind = 'ammo_bunker' | 'fuel_depot';
@@ -219,6 +238,7 @@ export interface ActiveTower {
   turretPitch: number;
   killCount: number;
   radarBoosted?: boolean;
+  highGround?: boolean;
 }
 
 export interface Projectile {
